@@ -1038,12 +1038,29 @@ function renderDisc() {
       <div class="foot"><button class="btn sm" type="button" data-mpreview="${esc(m.idMeal)}">Preview</button><button class="btn sm sp ${saved ? "" : "primary"}" type="button" data-msave="${esc(m.idMeal)}" ${saved ? "disabled" : ""}>${saved ? "Saved" : "Save"}</button></div></div></article>`;
   }).join("");
 }
+/* TheMealDB's name search only matches the whole phrase ("chicken tacos" finds nothing), so search each word and
+   the words as ingredients too, then list meals whose names contain the most search words first. */
+const MEAL_SYN = { hamburger: "burger", cheeseburger: "burger", spag: "spaghetti", mac: "macaroni", bolognaise: "bolognese" };
+const MEAL_STOP = new Set(["and", "with", "the", "recipe", "recipes", "easy", "best", "homemade"]);
+async function searchMeals(q) {
+  const words = q.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(w => w.length > 2 && !MEAL_STOP.has(w));
+  const stems = [...new Set(words.map(w => MEAL_SYN[w] || MEAL_SYN[singular(w)] || singular(w)))];
+  const paths = new Set(["search.php?s=" + encodeURIComponent(q.trim())]);
+  for (const w of stems) paths.add("search.php?s=" + encodeURIComponent(w));
+  if (stems.length) paths.add("filter.php?i=" + encodeURIComponent(stems.join("_")));
+  if (stems.length > 1) for (const w of stems) paths.add("filter.php?i=" + encodeURIComponent(w));
+  const lists = await Promise.all([...paths].map(p => mealdb(p).catch(() => [])));
+  const byId = new Map();
+  for (const m of lists.flat()) byId.set(m.idMeal, { ...byId.get(m.idMeal), ...m });
+  const score = m => { const n = m.strMeal.toLowerCase(); return stems.filter(s => n.includes(s)).length * 10 + (n.includes(q.trim().toLowerCase()) ? 5 : 0) + (m.strInstructions ? 1 : 0); };
+  return [...byId.values()].sort((a, b) => score(b) - score(a) || a.strMeal.localeCompare(b.strMeal));
+}
 async function runDisc(kind, val) {
   const st = $("#discStatus");
   st.className = "status"; st.innerHTML = `<span class="spin"></span>Searching TheMealDB…`;
   try {
     let meals;
-    if (kind === "q") meals = await mealdb("search.php?s=" + encodeURIComponent(val));
+    if (kind === "q") meals = await searchMeals(val);
     else if (kind === "random") { meals = []; for (let i = 0; i < 3; i++) meals.push(...await mealdb("random.php")); }
     else meals = await mealdb("filter.php?c=" + encodeURIComponent(val));
     meals.forEach(m => { if (m.strInstructions) mealCache.set(m.idMeal, m); });
