@@ -234,7 +234,7 @@ function loadImages() {
    A sync downloads that file, keeps the newer side of every doc, uploads photos Drive lacks and writes the merge back.
    The merge is a union, so two devices syncing at once can't lose edits: whatever one overwrote in Drive is still local
    on the other and goes back up on its next sync. */
-const GOOGLE_CLIENT_ID = ""; // OAuth web client from Google Cloud; public by design, not a secret
+const GOOGLE_CLIENT_ID = "677487657676-bmoo7igdgk9eq0pr8dtq6nmpvh89gv8f.apps.googleusercontent.com"; // OAuth web client from Google Cloud; public by design, not a secret
 const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const DRIVE = "https://www.googleapis.com/drive/v3/files", UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
 const TOMBSTONE_DAYS = 90;

@@ -21,7 +21,7 @@ This project contains two apps that share the same views and data model:
   - Drive's `Forkast` folder holds `forkast-data.json` (`{format: "forkast-sync", version: 1, docs: {path: {ts, deleted?, data?}}, images: {imageId: {fileId, ts}}}`) plus one file per photo.
   - `runSync` merges the two copies, keeping the newer doc on each side. It drops tombstones older than 90 days, uploads missing photos and deletes photos no recipe has used for a day. Missing photos are downloaded on demand (`fetchDriveImage`).
   - Sign-in uses Google Identity Services' token client with the `drive.file openid email` scope. Tokens last an hour and aren't refreshed silently, so when one expires the header chip shows "Reconnect Drive".
-  - `GOOGLE_CLIENT_ID` in `app.js` must be set. While it's empty, sync stays hidden.
+  - `GOOGLE_CLIENT_ID` in `app.js` holds the OAuth web client from Google Cloud project "Forkast" (owner MichelleAndZac@gmail.com, published to production, origins https://miandza.github.io and http://localhost:8080). If it's empty, sync is hidden.
   - Sync runs on load, 2.5 s after a change, when the page becomes visible, when the device comes back online, and every 5 minutes.
   - To test without Google: serve a copy of `app.js` with a dummy client ID and the GIS script URL blanked out, with a fake `window.google` and a fake `fetch` for googleapis URLs loaded first.
 - Data paths and recipe fields match the Artifact data model below. Differences: images live in the backend's image store, shown through object URLs (`imgUrls`, `loadImages`), not `/_blob/`. TheMealDB recipes also store `thumbUrl`.
