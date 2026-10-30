@@ -398,7 +398,7 @@ function drawDriveBox() {
   if (backend !== localBackend) { box.innerHTML = `<span class="hint">This browser can't save data, so sync is off.</span>`; return; }
   if (!sync.email) {
     box.innerHTML = `<div><button class="btn primary" type="button" id="driveConnect">Connect Google Drive</button></div>
-      <span class="hint">Keeps your recipes, plans and shopping lists in a Forkast folder in your Google Drive, so every device you sign in on shares them. Forkast can only see the files it creates.</span>`;
+      <span class="hint">Keeps your recipes, plans and shopping lists in a Forkast folder in your Google Drive, so every device you sign in on shares them. Forkast can only see the files it creates. <a href="privacy.html" target="_blank" rel="noopener">Privacy policy</a></span>`;
     return;
   }
   const s = sync.status;
