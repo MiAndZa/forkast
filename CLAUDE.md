@@ -16,7 +16,14 @@ This project contains two apps that share the same views and data model:
 - Run locally: the `larder-web` entry in `.claude/launch.json` runs `python -m http.server 8080 --directory web`. Open http://localhost:8080.
 - Storage (`app.js` → "Storage"): the `store` wrapper (set/del/watchDoc/watchCol/refresh) calls a swappable `backend` object with `ready, getAll(col), get, set, del, putImage, getImage, delImage`.
   - `localBackend` uses IndexedDB (database `larder`, object stores `docs` keyed by path and `images` holding blobs). `memoryBackend` is the fallback.
-  - **Google Drive sync is next:** add a `driveBackend` with the same shape. It needs a Google Cloud OAuth client ID from the user.
+  - Every write also stamps the `meta` store (path → `{ts, deleted?}`), so deletes are kept as tombstones. The `kv` store holds sync state under the `drive` key.
+- **Google Drive sync** (`app.js` → "Google Drive sync"): IndexedDB stays the working copy.
+  - Drive's `Forkast` folder holds `forkast-data.json` (`{format: "forkast-sync", version: 1, docs: {path: {ts, deleted?, data?}}, images: {imageId: {fileId, ts}}}`) plus one file per photo.
+  - `runSync` merges the two copies, keeping the newer doc on each side. It drops tombstones older than 90 days, uploads missing photos and deletes photos no recipe has used for a day. Missing photos are downloaded on demand (`fetchDriveImage`).
+  - Sign-in uses Google Identity Services' token client with the `drive.file openid email` scope. Tokens last an hour and aren't refreshed silently, so when one expires the header chip shows "Reconnect Drive".
+  - `GOOGLE_CLIENT_ID` in `app.js` must be set. While it's empty, sync stays hidden.
+  - Sync runs on load, 2.5 s after a change, when the page becomes visible, when the device comes back online, and every 5 minutes.
+  - To test without Google: serve a copy of `app.js` with a dummy client ID and the GIS script URL blanked out, with a fake `window.google` and a fake `fetch` for googleapis URLs loaded first.
 - Data paths and recipe fields match the Artifact data model below. Differences: images live in the backend's image store, shown through object URLs (`imgUrls`, `loadImages`), not `/_blob/`. TheMealDB recipes also store `thumbUrl`.
 - Add recipe: **Paste text** (heuristic `parseRecipeText`, no AI), **Type it in**, **Photo** (attached and filled in by hand), **Import**.
 - Export/import format: `{format: "larder-export", version: 1, exportedAt, recipes: [{id, ...recipe, images: [dataURL]}], plans?, shopping?}`. Both apps write it, and the web app reads it (`parseExport`, `importData`). Importing a recipe whose id already exists replaces it.

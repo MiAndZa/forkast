@@ -133,14 +133,16 @@ let unsubPlan = null, unsubShop = null;
 /* ---------------- Storage ----------------
    A backend keeps docs by path ("recipes/<id>", "plans/<week>", "shopping/<week>") and image blobs by id:
    ready(), getAll(col) -> [[path, doc]], get(path), set(path, doc), del(path), putImage(blob) -> id, getImage(id), delImage(id).
-   localBackend uses this browser's IndexedDB. A Google Drive backend will plug in here later with the same shape. */
+   localBackend uses this browser's IndexedDB and is always the working copy; Google Drive sync (below) merges it with
+   the copy in Drive. For that, every write also stamps "meta" (path -> {ts, deleted?}), so deletes survive as tombstones. */
 function idbReq(r) { return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+function txDone(t) { return new Promise((res, rej) => { t.oncomplete = () => res(); t.onerror = t.onabort = () => rej(t.error); }); }
 const localBackend = {
   label: "this browser", db: null,
   async ready() {
     if (this.db) return;
-    const open = indexedDB.open("larder", 1);
-    open.onupgradeneeded = () => { open.result.createObjectStore("docs"); open.result.createObjectStore("images"); };
+    const open = indexedDB.open("larder", 2);
+    open.onupgradeneeded = () => { for (const s of ["docs", "images", "meta", "kv"]) if (!open.result.objectStoreNames.contains(s)) open.result.createObjectStore(s); };
     this.db = await idbReq(open);
   },
   os(name, mode = "readonly") { return this.db.transaction(name, mode).objectStore(name); },
@@ -150,11 +152,38 @@ const localBackend = {
     return keys.map((k, i) => [k, vals[i]]);
   },
   async get(path) { return (await idbReq(this.os("docs").get(path))) ?? null; },
-  async set(path, doc) { await idbReq(this.os("docs", "readwrite").put(doc, path)); },
-  async del(path) { await idbReq(this.os("docs", "readwrite").delete(path)); },
-  async putImage(blob) { const id = uid(); await idbReq(this.os("images", "readwrite").put(blob, id)); return id; },
+  async set(path, doc) { await this.write(path, doc, { ts: Date.now() }); sync.changed(); },
+  async del(path) { await this.write(path, null, { ts: Date.now(), deleted: true }); sync.changed(); },
+  async write(path, doc, meta) {
+    const t = this.db.transaction(["docs", "meta"], "readwrite");
+    if (doc) t.objectStore("docs").put(doc, path); else t.objectStore("docs").delete(path);
+    t.objectStore("meta").put(meta, path);
+    await txDone(t);
+  },
+  async putImage(blob, id = uid()) { await idbReq(this.os("images", "readwrite").put(blob, id)); return id; },
   async getImage(id) { return (await idbReq(this.os("images").get(id))) || null; },
   async delImage(id) { await idbReq(this.os("images", "readwrite").delete(id)); },
+  // For sync: every doc as {ts, deleted?, data?}. Docs saved before meta existed count as their updatedAt.
+  async snapshot() {
+    const t = this.db.transaction(["docs", "meta"]), d = t.objectStore("docs"), m = t.objectStore("meta");
+    const [dk, dv, mk, mv] = await Promise.all([idbReq(d.getAllKeys()), idbReq(d.getAll()), idbReq(m.getAllKeys()), idbReq(m.getAll())]);
+    const out = {};
+    mk.forEach((k, i) => { out[k] = mv[i].deleted ? { ts: mv[i].ts, deleted: true } : { ts: mv[i].ts }; });
+    dk.forEach((k, i) => { out[k] = { ts: (out[k] && out[k].ts) || dv[i].updatedAt || 1, data: dv[i] }; });
+    return out;
+  },
+  // Applies a doc from Drive unless this device changed it more recently (e.g. while the sync was running).
+  async applyRemote(path, e) {
+    const t = this.db.transaction(["docs", "meta"], "readwrite"), m = t.objectStore("meta");
+    const cur = await idbReq(m.get(path));
+    if (cur && cur.ts > e.ts) return false;
+    if (e.deleted) t.objectStore("docs").delete(path); else t.objectStore("docs").put(e.data, path);
+    m.put(e.deleted ? { ts: e.ts, deleted: true } : { ts: e.ts }, path);
+    await txDone(t);
+    return true;
+  },
+  async kvGet(k) { return (await idbReq(this.os("kv").get(k))) ?? null; },
+  async kvSet(k, v) { await idbReq(this.os("kv", "readwrite").put(v, k)); },
 };
 const memoryBackend = {
   label: "memory only", docs: new Map(), imgs: new Map(),
@@ -190,12 +219,201 @@ function loadImages() {
   for (const r of state.recipes.values()) for (const id of r.imageIds || []) {
     if (imgUrls.has(id)) continue;
     imgUrls.set(id, "");
-    backend.getImage(id).then(b => {
-      if (!b) return;
+    backend.getImage(id).then(b => b || (backend === localBackend ? fetchDriveImage(id) : null)).then(b => {
+      if (!b) { imgUrls.delete(id); return; }
       imgUrls.set(id, URL.createObjectURL(b));
-      if (!imgRenderQueued) { imgRenderQueued = true; requestAnimationFrame(() => { imgRenderQueued = false; renderAll(); }); }
+      if (!imgRenderQueued) { imgRenderQueued = true; setTimeout(() => { imgRenderQueued = false; renderAll(); }, 30); }
     }).catch(() => {});
   }
+}
+
+/* ---------------- Google Drive sync ----------------
+   IndexedDB stays the working copy, so the app works offline; Drive holds a merged copy for the other devices.
+   The "Forkast" folder in Drive (drive.file scope: the app sees only files it made) holds one file per photo and
+   forkast-data.json = {format: "forkast-sync", version: 1, docs: {path: {ts, deleted?, data?}}, images: {imageId: {fileId, ts}}}.
+   A sync downloads that file, keeps the newer side of every doc, uploads photos Drive lacks and writes the merge back.
+   The merge is a union, so two devices syncing at once can't lose edits: whatever one overwrote in Drive is still local
+   on the other and goes back up on its next sync. */
+const GOOGLE_CLIENT_ID = ""; // OAuth web client from Google Cloud; public by design, not a secret
+const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE = "https://www.googleapis.com/drive/v3/files", UPLOAD = "https://www.googleapis.com/upload/drive/v3/files";
+const TOMBSTONE_DAYS = 90;
+const sync = {
+  status: "off", // off | idle | syncing | offline | reconnect | error
+  email: "", lastSync: 0, error: "", images: {},
+  token: "", tokenExp: 0, timer: null, running: null, again: false, imgTried: new Set(),
+  changed() { scheduleSync(); },
+};
+const driveOn = () => !!GOOGLE_CLIENT_ID && backend === localBackend;
+const hasToken = () => !!sync.token && Date.now() < sync.tokenExp - 60000;
+function saveToken() { try { localStorage.setItem("forkast-drive-token", JSON.stringify({ t: sync.token, e: sync.tokenExp })); } catch {} }
+function loadToken() { try { const j = JSON.parse(localStorage.getItem("forkast-drive-token")); if (j) { sync.token = j.t || ""; sync.tokenExp = j.e || 0; } } catch {} }
+
+let gisLoading = null;
+function loadGis() {
+  return gisLoading ||= new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client"; s.async = true;
+    s.onload = () => res(); s.onerror = () => { gisLoading = null; rej(new Error("Couldn't load Google sign-in. Check your connection.")); };
+    document.head.appendChild(s);
+  });
+}
+// Must run inside a click handler: Google opens its sign-in window from here.
+function requestToken() {
+  return new Promise((res, rej) => {
+    google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID, scope: DRIVE_FILE_SCOPE + " openid email", login_hint: sync.email || undefined,
+      callback: r => r.error ? rej(new Error(r.error_description || r.error)) : res(r),
+      error_callback: e => rej(new Error(e && e.type === "popup_closed" ? "The Google sign-in window was closed." : e && e.type === "popup_failed_to_open" ? "Allow pop-ups for this site, then try again." : "Google sign-in failed.")),
+    }).requestAccessToken({ prompt: sync.email ? "" : "consent" });
+  });
+}
+async function connectDrive() {
+  if (!window.google || !google.accounts || !google.accounts.oauth2) { loadGis().catch(() => {}); toast("Google sign-in is still loading. Try again in a moment."); return; }
+  try {
+    const r = await requestToken();
+    if (!google.accounts.oauth2.hasGrantedAllScopes(r, DRIVE_FILE_SCOPE)) throw new Error("Forkast needs permission to keep its files in your Google Drive. Tick that box when Google asks.");
+    sync.token = r.access_token; sync.tokenExp = Date.now() + (Number(r.expires_in) || 3600) * 1000; saveToken();
+    if (!sync.email) {
+      const u = await (await gfetch("https://www.googleapis.com/oauth2/v3/userinfo")).json();
+      sync.email = u.email || "your Google account";
+      await localBackend.kvSet("drive", { ...((await localBackend.kvGet("drive")) || {}), email: sync.email });
+    }
+    await syncNow();
+    if (sync.status === "idle") toast("Synced with Google Drive");
+  } catch (e) { toast(e.message || "Couldn't connect to Google Drive"); }
+  drawDriveBox();
+}
+async function disconnectDrive() {
+  try { if (sync.token && window.google) google.accounts.oauth2.revoke(sync.token, () => {}); } catch {}
+  Object.assign(sync, { email: "", token: "", tokenExp: 0, lastSync: 0, images: {}, error: "" });
+  saveToken(); await localBackend.kvSet("drive", null);
+  setSyncStatus("off"); drawDriveBox(); toast("Disconnected. Your data stays on this device and in Drive.");
+}
+
+async function gfetch(url, opts = {}) {
+  if (!hasToken()) throw Object.assign(new Error("Google sign-in expired"), { code: "reconnect" });
+  const res = await fetch(url, { ...opts, headers: { Authorization: "Bearer " + sync.token, ...(opts.headers || {}) } });
+  if (res.status === 401) { sync.token = ""; saveToken(); throw Object.assign(new Error("Google sign-in expired"), { code: "reconnect" }); }
+  if (!res.ok) {
+    let msg = String(res.status); try { msg = (await res.json()).error.message || msg; } catch {}
+    throw Object.assign(new Error("Google Drive: " + msg), { status: res.status });
+  }
+  return res;
+}
+async function driveFind(name, parent, folder) {
+  const q = [`name = '${name}'`, "trashed = false", parent && `'${parent}' in parents`, folder && "mimeType = 'application/vnd.google-apps.folder'"].filter(Boolean).join(" and ");
+  const j = await (await gfetch(`${DRIVE}?q=${encodeURIComponent(q)}&spaces=drive&fields=files(id)&pageSize=1`)).json();
+  return j.files && j.files[0] ? j.files[0].id : null;
+}
+async function driveCreate(meta, body) {
+  if (body == null) return (await (await gfetch(`${DRIVE}?fields=id`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(meta) })).json()).id;
+  const fd = new FormData();
+  fd.append("metadata", new Blob([JSON.stringify(meta)], { type: "application/json" }));
+  fd.append("file", body instanceof Blob ? body : new Blob([body], { type: meta.mimeType || "application/json" }));
+  return (await (await gfetch(`${UPLOAD}?uploadType=multipart&fields=id`, { method: "POST", body: fd })).json()).id;
+}
+async function driveDelete(id) { try { await gfetch(`${DRIVE}/${id}`, { method: "DELETE" }); } catch (e) { if (e.status !== 404) throw e; } }
+
+async function runSync() {
+  const st = (await localBackend.kvGet("drive")) || { email: sync.email };
+  if (!st.folderId) st.folderId = (await driveFind("Forkast", null, true)) || (await driveCreate({ name: "Forkast", mimeType: "application/vnd.google-apps.folder" }));
+  if (!st.fileId) st.fileId = await driveFind("forkast-data.json", st.folderId);
+  let remote = { docs: {}, images: {} }, raw = "";
+  if (st.fileId) {
+    try { raw = await (await gfetch(`${DRIVE}/${st.fileId}?alt=media`)).text(); const j = JSON.parse(raw); if (j && j.format === "forkast-sync") remote = { docs: j.docs || {}, images: j.images || {} }; }
+    catch (e) {
+      if (e.status !== 404) { if (e instanceof SyntaxError) raw = ""; else throw e; }
+      // The file or folder was deleted in Drive: forget both and start a fresh copy there.
+      else if (!st.retried) { await localBackend.kvSet("drive", { email: st.email, retried: true }); return runSync(); }
+    }
+  }
+  delete st.retried;
+  // Merge: newer timestamp wins per doc; old tombstones are dropped.
+  const local = await localBackend.snapshot(), merged = {}, cutoff = Date.now() - TOMBSTONE_DAYS * 864e5;
+  let pulled = 0;
+  for (const path of new Set([...Object.keys(local), ...Object.keys(remote.docs)])) {
+    const l = local[path], r = remote.docs[path];
+    const win = r && (!l || r.ts > l.ts) ? r : l;
+    if (win === r && (!l || !!l.deleted !== !!r.deleted || JSON.stringify(l.data) !== JSON.stringify(r.data))) { if (await localBackend.applyRemote(path, r)) pulled++; }
+    if (!(win.deleted && win.ts < cutoff)) merged[path] = win;
+  }
+  // Photos: upload the ones Drive lacks; remove ones no recipe has used for a day.
+  const images = { ...remote.images }, used = new Set();
+  for (const e of Object.values(merged)) if (!e.deleted && e.data && Array.isArray(e.data.imageIds)) e.data.imageIds.forEach(id => used.add(id));
+  for (const id of used) {
+    if (images[id]) continue;
+    const blob = await localBackend.getImage(id); if (!blob) continue;
+    images[id] = { fileId: await driveCreate({ name: id + ".jpg", parents: [st.folderId], mimeType: blob.type || "image/jpeg" }, blob), ts: Date.now() };
+  }
+  for (const [id, im] of Object.entries(images)) if (!used.has(id) && Date.now() - (im.ts || 0) > 864e5) { await driveDelete(im.fileId); delete images[id]; }
+  const out = JSON.stringify({ format: "forkast-sync", version: 1, docs: merged, images });
+  if (out !== raw) {
+    if (st.fileId) await gfetch(`${UPLOAD}/${st.fileId}?uploadType=media`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: out });
+    else st.fileId = await driveCreate({ name: "forkast-data.json", parents: [st.folderId], mimeType: "application/json" }, out);
+  }
+  st.lastSync = Date.now(); st.images = images;
+  await localBackend.kvSet("drive", st);
+  Object.assign(sync, { lastSync: st.lastSync, images, error: "" });
+  sync.imgTried.clear();
+  if (pulled) store.refresh();
+}
+async function fetchDriveImage(id) {
+  const im = sync.images[id];
+  if (!im || !hasToken() || sync.imgTried.has(id)) return null;
+  sync.imgTried.add(id);
+  try { const b = await (await gfetch(`${DRIVE}/${im.fileId}?alt=media`)).blob(); await localBackend.putImage(b, id); return b; }
+  catch (e) { console.warn(e); return null; }
+}
+function scheduleSync(delay = 2500) { if (!sync.email || !driveOn()) return; clearTimeout(sync.timer); sync.timer = setTimeout(syncNow, delay); }
+function syncNow() {
+  if (!sync.email || !driveOn()) return Promise.resolve();
+  if (sync.running) { sync.again = true; return sync.running; }
+  if (navigator.onLine === false) { setSyncStatus("offline"); return Promise.resolve(); }
+  if (!hasToken()) { setSyncStatus("reconnect"); return Promise.resolve(); }
+  setSyncStatus("syncing");
+  sync.running = runSync().then(() => setSyncStatus("idle")).catch(e => {
+    console.warn(e);
+    if (e.code === "reconnect") setSyncStatus("reconnect"); else { sync.error = e.message || String(e); setSyncStatus("error"); }
+  }).finally(() => { sync.running = null; if (sync.again) { sync.again = false; scheduleSync(300); } });
+  return sync.running;
+}
+function agoText(t) {
+  if (!t) return "never"; const s = (Date.now() - t) / 1000;
+  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t).toLocaleDateString();
+}
+const SYNC_LABEL = { idle: "Synced", syncing: "Syncing…", offline: "Offline", reconnect: "Reconnect Drive", error: "Sync problem" };
+function setSyncStatus(s) {
+  sync.status = s;
+  const b = $("#syncBtn");
+  b.hidden = s === "off";
+  b.dataset.state = s;
+  b.textContent = SYNC_LABEL[s] || "";
+  b.title = s === "idle" ? `Synced with Google Drive ${agoText(sync.lastSync)}` : s === "error" ? sync.error : s === "reconnect" ? "Sign in to Google again to keep syncing" : "";
+  drawDriveBox();
+}
+function drawDriveBox() {
+  const box = $("#driveBox"); if (!box) return;
+  if (!GOOGLE_CLIENT_ID) { box.innerHTML = `<span class="hint">Google Drive sync isn't set up in this copy of Forkast yet.</span>`; return; }
+  if (backend !== localBackend) { box.innerHTML = `<span class="hint">This browser can't save data, so sync is off.</span>`; return; }
+  if (!sync.email) {
+    box.innerHTML = `<div><button class="btn primary" type="button" id="driveConnect">Connect Google Drive</button></div>
+      <span class="hint">Keeps your recipes, plans and shopping lists in a Forkast folder in your Google Drive, so every device you sign in on shares them. Forkast can only see the files it creates.</span>`;
+    return;
+  }
+  const s = sync.status;
+  box.innerHTML = `<div>Connected to <b>${esc(sync.email)}</b>. ${s === "syncing" ? "Syncing now…" : s === "error" ? `<span class="status err" style="display:inline">Last sync failed: ${esc(sync.error)}</span>` : s === "reconnect" ? "Google sign-in has expired." : s === "offline" ? "You're offline; changes sync when you reconnect." : `Last synced ${agoText(sync.lastSync)}.`}</div>
+    <div class="row">${s === "reconnect" ? `<button class="btn primary" type="button" id="driveConnect">Reconnect</button>` : `<button class="btn" type="button" id="driveSync" ${s === "syncing" ? "disabled" : ""}>Sync now</button>`}<button class="btn ghost danger" type="button" id="driveOff">Disconnect</button></div>`;
+}
+async function startSync() {
+  if (!driveOn()) return;
+  loadToken();
+  const st = await localBackend.kvGet("drive");
+  if (st && st.email) Object.assign(sync, { email: st.email, lastSync: st.lastSync || 0, images: st.images || {} });
+  loadGis().catch(() => {});
+  if (sync.email) syncNow();
+  setInterval(() => { if (document.visibilityState === "visible") scheduleSync(0); }, 5 * 60 * 1000);
+  window.addEventListener("online", () => scheduleSync(0));
 }
 
 function showStoreBanner(msg) { const b = $("#storeBanner"); b.textContent = msg; b.hidden = false; }
@@ -697,11 +915,13 @@ function openData() {
   const n = state.recipes.size;
   const m = openModal(`<div class="m-head"><h2>Your data</h2>${closeBtn}</div>
     <div class="m-body">
-      <p style="margin:0">Your recipes, plans and shopping lists are saved in <b>${esc(backend.label)}</b>${backend === localBackend ? " on this device. Other devices can't see them yet; that comes with Google Drive sync." : "."}</p>
+      <p style="margin:0">Your recipes, plans and shopping lists are saved in <b>${esc(backend.label)}</b>${backend === localBackend ? " on this device, so Forkast works offline." : "."}</p>
+      <div class="field"><span class="lbl-s">Google Drive sync</span><div class="field" id="driveBox"></div></div>
       <div class="field"><span class="lbl-s">Back up</span><div><button class="btn" type="button" id="expAll">Download backup</button></div><span class="hint">${n} recipe${n === 1 ? "" : "s"} with photos, plus every week's plan and shopping list, in one .json file you can import on another device.</span></div>
       <div class="field"><span class="lbl-s">Import</span><div><button class="btn" type="button" data-addmode="import">Import recipes…</button></div><span class="hint">From a backup, or recipes exported from <a href="${ARTIFACT_URL}" target="_blank" rel="noopener">Forkast on claude.ai</a>.</span></div>
       <div class="status" id="dataStatus"></div>
     </div>`, { narrow: true });
+  drawDriveBox();
   $("#expAll", m).onclick = async () => {
     const st = $("#dataStatus", m); st.className = "status"; st.innerHTML = `<span class="spin"></span>Preparing backup…`;
     try { await downloadJson(await buildExport(), `forkast-backup-${isoDate(new Date())}.json`); st.textContent = ""; }
@@ -897,6 +1117,10 @@ document.addEventListener("click", e => {
   }
   if (t.id === "clearYes") { state.plan.slots = []; state.shop = { status: {}, extras: state.shop.extras }; savePlan(); saveShop(); renderAll(); toast("Week cleared"); return; }
   if (t.id === "clearNo") { renderAll(); return; }
+  if (t.id === "driveConnect" || (t.id === "syncBtn" && sync.status === "reconnect")) { connectDrive(); return; }
+  if (t.id === "syncBtn") { openData(); return; }
+  if (t.id === "driveSync") { syncNow(); return; }
+  if (t.id === "driveOff") { disconnectDrive(); return; }
 });
 document.addEventListener("click", e => { const z = e.target.closest("img[data-zoom]"); if (z) { const lb = $("#lightbox"); $("img", lb).src = z.dataset.zoom; lb.hidden = false; } });
 document.addEventListener("change", e => {
@@ -944,7 +1168,8 @@ function startData() {
   catch (e) { console.warn(e); backend = memoryBackend; showStoreBanner("This browser won't let Forkast save anything (private browsing?), so changes are lost when you close the page."); }
   if (backend === localBackend && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   startData();
+  startSync();
 })();
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") store.refresh(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { store.refresh(); scheduleSync(0); } });
 if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("Service worker:", e)));
 })();

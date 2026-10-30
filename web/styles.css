@@ -55,6 +55,12 @@ nav.tabs a .count { font-family: var(--f-mono); font-size: 11px; margin-left: 4p
 .btn:disabled { opacity: .5; cursor: default }
 .icon-btn { border: 0; background: transparent; width: 28px; height: 28px; border-radius: 8px; display: inline-grid; place-items: center; color: var(--muted); font-size: 16px; line-height: 1 }
 .icon-btn:hover { background: var(--tint); color: var(--ink) }
+.sync-chip { border: 0; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; padding: 4px 8px; border-radius: 999px; white-space: nowrap }
+.sync-chip::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--have); margin-right: 6px; vertical-align: 1px }
+.sync-chip:hover { background: var(--tint); color: var(--ink) }
+.sync-chip[data-state="syncing"]::before, .sync-chip[data-state="offline"]::before { background: var(--muted) }
+.sync-chip[data-state="reconnect"], .sync-chip[data-state="error"] { color: var(--tomato); border: 1px solid currentColor }
+.sync-chip[data-state="reconnect"]::before, .sync-chip[data-state="error"]::before { background: var(--tomato) }
 
 main { padding-block: 24px 80px }
 .view-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 20px; flex-wrap: wrap; margin-bottom: 18px }

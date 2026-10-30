@@ -1051,6 +1051,7 @@ const MEALDB = "https://www.themealdb.com/api/json/v1/1/";
 const CATS = ["Beef", "Chicken", "Pork", "Lamb", "Seafood", "Pasta", "Vegetarian", "Vegan", "Breakfast", "Side", "Dessert"];
 const EXT = [["Allrecipes", q => `https://www.allrecipes.com/search?q=${q}`], ["BBC Good Food", q => `https://www.bbcgoodfood.com/search?q=${q}`], ["Budget Bytes", q => `https://www.budgetbytes.com/?s=${q}`], ["Serious Eats", q => `https://www.seriouseats.com/search?q=${q}`], ["NYT Cooking", q => `https://cooking.nytimes.com/search?q=${q}`], ["Food Network", q => `https://www.foodnetwork.com/search/${q}-`]];
 const mealCache = new Map();
+const WEB_DISCOVER = `<a href="https://miandza.github.io/forkast/#discover" target="_blank" rel="noopener">Discover in the Forkast web app ↗</a>`;
 async function mealdb(path) {
   const t = await browserGetText(MEALDB + path, 400000);
   const s = t.indexOf("{"), e = t.lastIndexOf("}");
@@ -1072,7 +1073,7 @@ function renderDisc() {
   $("#discCats").innerHTML = CATS.map(c => `<button class="chip" type="button" data-cat="${c}">${c}</button>`).join("");
   const q = encodeURIComponent($("#discQ").value.trim() || "dinner");
   $("#extLinks").innerHTML = EXT.map(([n, f]) => `<a class="btn sm" href="${esc(f(q))}" target="_blank" rel="noopener">${n} ↗</a>`).join("") + `<button class="btn sm primary" type="button" data-addmode="link">Import a link</button>`;
-  $("#discBanner").innerHTML = mcp ? "" : `<div class="banner" data-tone="warn">Searching the recipe database works when this page is open in the Claude desktop app. The site links below work anywhere.</div>`;
+  $("#discBanner").innerHTML = mcp ? "" : `<div class="banner" data-tone="warn"><span>Searching here only works in the Claude desktop app. Anywhere else, use ${WEB_DISCOVER}, or the site links below.</span></div>`;
   const savedIds = new Set([...state.recipes.values()].map(r => r.mealdbId).filter(Boolean));
   $("#discBody").innerHTML = state.disc.results.map(m => {
     const saved = savedIds.has(m.idMeal);
@@ -1084,7 +1085,7 @@ function renderDisc() {
 }
 async function runDisc(kind, val) {
   const st = $("#discStatus");
-  if (!mcp) { st.className = "status err"; st.textContent = "Open this page in the Claude desktop app to search TheMealDB."; return; }
+  if (!mcp) { st.className = "status err"; st.innerHTML = `<span>Searching here only works in the Claude desktop app. Try ${WEB_DISCOVER}.</span>`; return; }
   st.className = "status"; st.innerHTML = `<span class="spin"></span>Searching TheMealDB…`;
   try {
     let meals;
@@ -1095,7 +1096,7 @@ async function runDisc(kind, val) {
     state.disc.results = meals.slice(0, 48);
     st.className = "status"; st.textContent = meals.length ? `${meals.length} result${meals.length > 1 ? "s" : ""}${meals.length > 48 ? ", showing 48" : ""}` : "No recipes found. Try a simpler search, like a single ingredient.";
     renderDisc();
-  } catch (e) { st.className = "status err"; st.textContent = browserErr(e); }
+  } catch (e) { st.className = "status err"; st.innerHTML = `<span>${esc(browserErr(e))} You can also search in ${WEB_DISCOVER}.</span>`; }
 }
 async function getMeal(id) {
   if (mealCache.has(id)) return mealCache.get(id);
