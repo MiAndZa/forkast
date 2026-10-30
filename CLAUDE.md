@@ -2,7 +2,9 @@
 
 The app's user-facing name is **Forkast**. Some internal identifiers still say `larder`, and they should stay that way so existing data and exports keep working: the IndexedDB name `larder`, the export format `"larder-export"`, the localStorage keys `larder-sort` and `larder-local-v1`, the service-worker cache `larder-v1`, and this folder.
 
-GitHub repo: `forkast`, public. The site is served by GitHub Pages from `web/`. Commits use the email MichelleAndZac@gmail.com.
+- GitHub repo: https://github.com/MiAndZa/forkast (public). Commits use the email MichelleAndZac@gmail.com.
+- Live site: https://miandza.github.io/forkast/
+- Deploys: `.github/workflows/pages.yml` publishes `web/` on every push to `main`. `gh` is installed at `C:\Program Files\GitHub CLI\gh.exe`; it isn't on the Bash PATH, so call it by that full path.
 
 This project contains two apps that share the same views and data model:
 
