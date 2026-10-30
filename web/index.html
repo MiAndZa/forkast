@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Forkast Meal Planner</title>
+<meta name="description" content="Weekly meal planner, shopping list and recipe box.">
+<meta name="theme-color" content="#2E6A4E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Forkast">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="bar">
+  <div class="wrap">
+    <div class="brand"><b>Forkast</b><span>meal planner</span></div>
+    <nav class="tabs" aria-label="Views">
+      <a href="#plan" data-view="plan">This week</a>
+      <a href="#shopping" data-view="shopping">Shopping<span class="count" id="tabShopCount"></span></a>
+      <a href="#recipes" data-view="recipes">Recipes</a>
+      <a href="#discover" data-view="discover">Discover</a>
+    </nav>
+    <button class="btn primary" id="addRecipeBtn" type="button">+ Add recipe</button>
+    <button class="icon-btn" id="dataBtn" type="button" aria-label="Your data: export, import, storage" title="Your data">&#8942;</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="storeBanner" class="banner" data-tone="warn" hidden></div>
+
+  <!-- PLAN -->
+  <section id="view-plan" hidden>
+    <div class="view-head">
+      <div>
+        <h1 id="weekTitle">This week</h1>
+        <div class="sub">Pick meals for each day. Ingredients roll up into your shopping list.</div>
+      </div>
+      <div class="week-nav">
+        <button class="icon-btn" id="prevWeek" type="button" aria-label="Previous week">&#8592;</button>
+        <span class="lbl" id="weekLbl"></span>
+        <button class="icon-btn" id="nextWeek" type="button" aria-label="Next week">&#8594;</button>
+        <button class="btn sm ghost" id="thisWeek" type="button">Today</button>
+      </div>
+    </div>
+    <div class="week" id="week"></div>
+    <div class="plan-summary" id="planSummary"></div>
+  </section>
+
+  <!-- SHOPPING -->
+  <section id="view-shopping" hidden>
+    <div class="view-head">
+      <div>
+        <h1>Shopping list</h1>
+        <div class="sub" id="shopSub"></div>
+      </div>
+      <div class="row">
+        <button class="btn sm" id="copyList" type="button">Copy list</button>
+        <button class="btn sm ghost" id="resetChecks" type="button">Reset</button>
+      </div>
+    </div>
+    <div class="shop-tools">
+      <div class="seg" role="group" aria-label="Filter list" id="shopSeg">
+        <button type="button" data-f="need" aria-pressed="true">To buy<span class="n" id="nNeed"></span></button>
+        <button type="button" data-f="have" aria-pressed="false">Have<span class="n" id="nHave"></span></button>
+        <button type="button" data-f="all" aria-pressed="false">All<span class="n" id="nAll"></span></button>
+      </div>
+      <form class="add-item" id="addItemForm">
+        <input type="text" id="addItemInput" placeholder="Add an item, e.g. 2 lb apples" aria-label="Add an item">
+        <button class="btn sm" type="submit">Add</button>
+      </form>
+    </div>
+    <div id="shopBody"></div>
+  </section>
+
+  <!-- RECIPES -->
+  <section id="view-recipes" hidden>
+    <div class="view-head">
+      <div>
+        <h1>Recipe box</h1>
+        <div class="sub" id="libSub"></div>
+      </div>
+    </div>
+    <div class="lib-tools">
+      <input type="search" id="libSearch" placeholder="Search recipes or ingredients" aria-label="Search recipes">
+      <select id="libSort" aria-label="Sort recipes">
+        <option value="rating">Top rated</option>
+        <option value="recent">Recently added</option>
+        <option value="cooked">Most cooked</option>
+        <option value="az">A to Z</option>
+      </select>
+      <select id="libMin" aria-label="Minimum rating">
+        <option value="0">Any rating</option>
+        <option value="3">3+ stars</option>
+        <option value="4">4+ stars</option>
+        <option value="5">5 stars</option>
+      </select>
+    </div>
+    <div class="chips" id="libTags" style="margin-bottom:16px"></div>
+    <div id="libBody"></div>
+  </section>
+
+  <!-- DISCOVER -->
+  <section id="view-discover" hidden>
+    <div class="view-head">
+      <div>
+        <h1>Discover recipes</h1>
+        <div class="sub">Search TheMealDB, an open recipe database, and save anything you like to your recipe box.</div>
+      </div>
+    </div>
+    <div id="discBanner"></div>
+    <form class="disc-search" id="discForm">
+      <input type="search" id="discQ" placeholder="Search by dish, e.g. lasagne, curry, tacos" aria-label="Search TheMealDB">
+      <button class="btn primary" type="submit">Search</button>
+      <button class="btn" type="button" id="discRandom">Surprise me</button>
+    </form>
+    <div class="chips" id="discCats" style="margin-bottom:18px"></div>
+    <div id="discStatus" class="status"></div>
+    <div id="discBody" class="grid" style="margin-top:12px"></div>
+    <div class="src-links">
+      <h2>Search other recipe sites</h2>
+      <div class="muted">Opens the site with your search. When you find a recipe, copy the recipe text into <b>Add recipe → Paste text</b>.</div>
+      <div class="row" id="extLinks"></div>
+    </div>
+  </section>
+</main>
+
+<div id="overlay" class="overlay" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<div id="lightbox" class="lightbox" hidden><img alt=""></div>
+<input type="file" id="fileInput" accept="image/*" multiple hidden>
+
+<script src="app.js"></script>
+</body>
+</html>

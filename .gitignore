@@ -1,0 +1,6 @@
+*.json.bak
+larder-backup-*.json
+forkast-backup-*.json
+forkast-recipes-*.json
+node_modules/
+.claude/settings.local.json
