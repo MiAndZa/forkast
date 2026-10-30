@@ -780,7 +780,7 @@ const stripStepNo = s => s.replace(/^\s*(step\s*)?\d+[.):\s-]+/i, "").trim();
 function parseRecipeText(text) {
   const out = { title: "", servings: null, totalTime: "", ingredients: [], steps: [], tags: [], notes: "" };
   const intro = [], notes = [];
-  let sec = "intro";
+  let sec = "intro", newStep = false;
   for (let l of String(text).replace(/\r/g, "").split("\n")) {
     l = l.replace(/\s+/g, " ").replace(/^#+\s*/, "").trim();
     if (!l) continue;
@@ -793,7 +793,14 @@ function parseRecipeText(text) {
     if (tm && !out.totalTime) { out.totalTime = tm[1]; continue; }
     if (sec === "intro") intro.push(l);
     else if (sec === "ing") { if (!/:$/.test(l)) out.ingredients.push(l.replace(BULLET, "")); }
-    else if (sec === "step") { if (!/^(step\s*)?\d+[.):]?$/i.test(l)) { const s = stripStepNo(l.replace(BULLET, "")); if (s) out.steps.push(s); } }
+    else if (sec === "step") {
+      if (/^(step\s*)?\d+[.):]?$/i.test(l)) { newStep = true; continue; }
+      // Lines wrapped by a photo or a narrow page continue the previous step until it ends a sentence.
+      const marked = /^\s*(step\s*)?\d+[.):\s-]+/i.test(l) || BULLET.test(l), s = stripStepNo(l.replace(BULLET, "")), prev = out.steps.length - 1;
+      if (!s) continue;
+      if (prev >= 0 && !marked && !newStep && !/[.!?:)]$/.test(out.steps[prev])) out.steps[prev] += " " + s; else out.steps.push(s);
+      newStep = false;
+    }
     else notes.push(l);
   }
   out.title = intro.shift() || "";
@@ -812,13 +819,14 @@ function parseRecipeText(text) {
 function drawPhotoAdd(m) {
   const body = $("#addBody", m), foot = $("#addFoot", m);
   body.innerHTML = `
-    <div class="drop" id="drop"><b>Add photos of the recipe</b>Cookbook pages, recipe cards or screenshots. They're saved with the recipe so you can read them while you cook. You can also paste a screenshot with Ctrl/Cmd+V.<div style="margin-top:12px"><button class="btn" type="button" id="pickFiles">Choose images</button></div></div>
+    <div class="drop" id="drop"><b>Take or choose photos of the recipe</b>Cookbook pages, printed recipe cards or screenshots, in page order. You can also paste a screenshot with Ctrl/Cmd+V.<div style="margin-top:12px"><button class="btn" type="button" id="pickFiles">Take or choose photos</button></div></div>
     <div class="thumbs" id="pendThumbs"></div>
-    <div class="muted" style="font-size:14px">Next you fill in the title and ingredients, so they show up in your shopping list.</div>${aiTip}`;
-  foot.innerHTML = `<button class="btn primary" type="button" id="photoNext" disabled>Continue</button>`;
+    <div class="status" id="photoStatus"></div>
+    <div class="muted" style="font-size:14px">Forkast reads printed text right on this device, and the photos are saved with the recipe. Handwriting usually doesn't read well; use “Fill in by hand” for that.</div>${aiTip}`;
+  foot.innerHTML = `<button class="btn ghost" type="button" id="photoNext" disabled>Fill in by hand</button><button class="btn primary" type="button" id="photoRead" disabled>Read recipe from photos</button>`;
   const drawThumbs = () => {
     $("#pendThumbs", m).innerHTML = pendingImages.map((p, i) => `<figure><img src="${p.url}" alt="Recipe image ${i + 1}"><button type="button" data-rmimg="${i}" aria-label="Remove image">×</button></figure>`).join("");
-    $("#photoNext", m).disabled = !pendingImages.length;
+    $("#photoNext", m).disabled = $("#photoRead", m).disabled = !pendingImages.length;
   };
   const addFiles = async files => {
     for (const f of files) { if (!f.type.startsWith("image/")) continue; const b = await resizeImage(f); pendingImages.push({ blob: b, url: URL.createObjectURL(b) }); }
@@ -835,6 +843,39 @@ function drawPhotoAdd(m) {
   modalCleanup = () => document.removeEventListener("paste", onPaste);
   $("#pendThumbs", m).addEventListener("click", e => { const b = e.target.closest("[data-rmimg]"); if (!b) return; const [p] = pendingImages.splice(+b.dataset.rmimg, 1); URL.revokeObjectURL(p.url); drawThumbs(); });
   $("#photoNext", m).onclick = () => openEditor({ source: "photo" }, true);
+  $("#photoRead", m).onclick = async () => {
+    const st = $("#photoStatus", m), btn = $("#photoRead", m);
+    const say = t => { st.className = "status"; st.innerHTML = `<span class="spin"></span>${esc(t)}`; };
+    btn.disabled = true;
+    say("Loading the text reader… the first time takes a little while.");
+    try {
+      const text = await ocrImages(pendingImages.map(p => p.blob), p => say(`Reading the photos… ${Math.round(p * 100)}%`));
+      if (overlay.firstElementChild !== m) return;
+      if (text.replace(/\s/g, "").length < 20) { st.className = "status err"; st.textContent = "Couldn't find readable text. Try a sharper, well-lit photo taken straight on, or fill it in by hand."; btn.disabled = false; return; }
+      openEditor({ ...parseRecipeText(text), source: "photo" }, true);
+    } catch (e) { st.className = "status err"; st.textContent = e.message || "Couldn't read the photos."; btn.disabled = false; }
+  };
+}
+
+/* On-device text recognition with Tesseract.js, loaded on first use. Its English data downloads once, then the browser caches it. */
+let tessLoading = null;
+function loadTesseract() {
+  return tessLoading ||= new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+    s.onload = () => res(window.Tesseract); s.onerror = () => { tessLoading = null; rej(new Error("Couldn't load the text reader. Check your internet connection.")); };
+    document.head.appendChild(s);
+  });
+}
+async function ocrImages(blobs, onProgress) {
+  const T = await loadTesseract();
+  let i = 0;
+  const worker = await T.createWorker("eng", 1, { logger: x => { if (x.status === "recognizing text") onProgress((i + x.progress) / blobs.length); } });
+  try {
+    const pages = [];
+    for (; i < blobs.length; i++) pages.push((await worker.recognize(blobs[i])).data.text);
+    return pages.join("\n");
+  } finally { worker.terminate(); }
 }
 
 function drawImportAdd(m) {

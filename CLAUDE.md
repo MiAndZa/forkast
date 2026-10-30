@@ -25,7 +25,9 @@ This project contains two apps that share the same views and data model:
   - Sync runs on load, 2.5 s after a change, when the page becomes visible, when the device comes back online, and every 5 minutes.
   - To test without Google: serve a copy of `app.js` with a dummy client ID and the GIS script URL blanked out, with a fake `window.google` and a fake `fetch` for googleapis URLs loaded first.
 - Data paths and recipe fields match the Artifact data model below. Differences: images live in the backend's image store, shown through object URLs (`imgUrls`, `loadImages`), not `/_blob/`. TheMealDB recipes also store `thumbUrl`.
-- Add recipe: **Paste text** (heuristic `parseRecipeText`, no AI), **Type it in**, **Photo** (attached and filled in by hand), **Import**.
+- Add recipe: **Paste text** (heuristic `parseRecipeText`, no AI), **Type it in**, **Photo**, **Import**.
+  - Photo: on-device text recognition with Tesseract.js 5.1.1, loaded from jsdelivr on first use (`loadTesseract`, `ocrImages`). The text goes through `parseRecipeText`, and the photos are saved with the recipe.
+  - Tesseract reads printed text well and handwriting poorly. For handwriting, use "Fill in by hand" or the artifact's Claude reader.
 - Export/import format: `{format: "larder-export", version: 1, exportedAt, recipes: [{id, ...recipe, images: [dataURL]}], plans?, shopping?}`. Both apps write it, and the web app reads it (`parseExport`, `importData`). Importing a recipe whose id already exists replaces it.
 - The **⋮** button opens "Your data": download a full backup, or import.
 - Discover calls TheMealDB with `fetch` (it allows CORS).
