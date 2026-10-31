@@ -765,8 +765,14 @@ function drawLinkAdd(m, url = "") {
     <div class="status" id="linkStatus"></div>
     <details class="muted" style="font-size:14px"><summary>Add straight from a recipe page</summary>
       <p>These send the recipe from the page you have open, so they also work on sites that block readers, like Allrecipes.</p>
-      <p><b>iPhone or iPad</b> (Shortcuts app): tap <b>+</b> to make a shortcut named <b>Add to Forkast</b>. Add the action <b>Run JavaScript on Web Page</b>, replace its code with the script below, then add <b>Open URLs</b> (it uses the JavaScript Result). In the shortcut's ⓘ settings, turn on <b>Show in Share Sheet</b>. On a recipe page in Safari, tap Share → Add to Forkast.
-      <span style="display:flex;gap:8px;margin-top:6px"><button class="btn sm" type="button" id="copyShortcut">Copy script</button></span></p>
+      <p><b>iPhone or iPad</b>, in the Shortcuts app:</p>
+      <ol style="margin:0 0 10px;padding-left:20px">
+        <li>Make a new shortcut named <b>Add to Forkast</b>.</li>
+        <li>Turn on its option to appear in the <b>Share Sheet</b>, and let it receive <b>Safari web pages</b>.</li>
+        <li>Add the action <b>Run JavaScript on Web Page</b> (search “JavaScript”). Its page should be the <b>Shortcut Input</b>. Delete all of its sample code and paste the script: <button class="btn sm" type="button" id="copyShortcut">Copy script</button></li>
+        <li>Add the action <b>Open URLs</b>. What it opens should be the <b>JavaScript Result</b>.</li>
+        <li>Use it from <b>Safari</b>: on a recipe page, tap Share, then Add to Forkast. Running it from the Shortcuts app doesn't work, because there's no page to read.</li>
+      </ol>
       <p><b>Computer:</b> drag this to your bookmarks bar, then click it on a recipe page: <a class="btn sm" href="${esc(BOOKMARKLET)}" onclick="return false">Add to Forkast</a></p>
       <p><b>Android:</b> install Forkast to your home screen, then pick Forkast in the share menu.</p>
       <p>Recipes sent this way open in the browser. Connect Google Drive there too, and they sync to your Forkast app.</p>
@@ -775,7 +781,7 @@ function drawLinkAdd(m, url = "") {
   const inp = $("#linkUrl", m), st = $("#linkStatus", m), btn = $("#linkGo", m);
   $("#copyShortcut", m).onclick = async e => {
     try { await navigator.clipboard.writeText(SHORTCUT_JS); toast("Script copied"); }
-    catch { e.target.parentElement.innerHTML = `<textarea rows="4" readonly style="width:100%">${esc(SHORTCUT_JS)}</textarea>`; }
+    catch { e.target.outerHTML = `<textarea rows="4" readonly style="width:100%">${esc(SHORTCUT_JS)}</textarea>`; }
   };
   if ($("#linkPaste", m)) $("#linkPaste", m).onclick = async () => {
     try { const t = await navigator.clipboard.readText(); const u = findUrl(t); inp.value = u || t.trim(); if (u) go(); } catch { inp.focus(); }
@@ -867,7 +873,8 @@ function parseRecipeText(text) {
 const READER_URL = "https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
-const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});return ${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href)+(r?"#ld="+encodeURIComponent(JSON.stringify(r)):"")})()`;
+// It sends only the fields ldToRecipe reads, so the link stays short (iOS Shortcuts rejects very long ones).
+const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var u=${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href);if(!r)return u;var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);var im=[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||"";var c={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:im};return u+"#ld="+encodeURIComponent(JSON.stringify(c))})()`;
 const BOOKMARKLET = `javascript:void(location.href=${GRAB_JS})`;
 const SHORTCUT_JS = `completion(${GRAB_JS});`;
 const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
