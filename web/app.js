@@ -863,11 +863,13 @@ function parseRecipeText(text) {
    your own Google Apps Script (READER_URL, see reader/Code.gs), then Jina's free reader (r.jina.ai).
    Most recipe sites include schema.org Recipe data, which is used first; otherwise the page text goes through parseRecipeText.
    Sites that block readers (the Allrecipes family answers 402) can still be sent from the user's own browser:
-   GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?url= and #ld=<the Recipe JSON>. */
+   GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?s=<packed>: base64url of
+   {u: page URL, r: the Recipe's fields that ldToRecipe reads}. iOS Shortcuts' Open URLs scans text for links and opens
+   every one it finds, so the packed part must contain no dots, slashes or % signs. */
 const READER_URL = "https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
-const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});return ${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href)+(r?"#ld="+encodeURIComponent(JSON.stringify(r)):"")})()`;
+const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var p={u:location.href};if(r){var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);p.r={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||""}}return ${JSON.stringify(SHARE_BASE + "?s=")}+btoa(unescape(encodeURIComponent(JSON.stringify(p)))).replace(/\\+/g,"-").replace(/\\//g,"_").replace(/=+$/,"")})()`;
 const BOOKMARKLET = `javascript:void(location.href=${GRAB_JS})`;
 const SHORTCUT_JS = `completion(${GRAB_JS});`;
 const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
@@ -1378,11 +1380,20 @@ function startData() {
   startData();
   startSync();
   // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=,
-  // and GRAB_JS adds the page's own recipe data as #ld=.
-  const qs = new URLSearchParams(location.search), shared = findUrl(qs.get("url")) || findUrl(qs.get("text"));
-  let sent = null;
-  if (location.hash.startsWith("#ld=")) { try { const n = findLdRecipe([decodeURIComponent(location.hash.slice(4))]); if (n) sent = ldToRecipe(n, shared); } catch (e) { console.warn(e); } }
-  if (qs.has("url") || qs.has("text") || location.hash.startsWith("#ld=")) {
+  // and GRAB_JS sends the page and its own recipe data packed as ?s= (older copies of the script used ?url= and #ld=).
+  const qs = new URLSearchParams(location.search);
+  let shared = findUrl(qs.get("url")) || findUrl(qs.get("text")), sent = null;
+  try {
+    if (qs.get("s")) {
+      const p = JSON.parse(decodeURIComponent(escape(atob(qs.get("s").replace(/-/g, "+").replace(/_/g, "/")))));
+      shared = findUrl(p.u);
+      if (p.r) sent = ldToRecipe(p.r, shared);
+    } else if (location.hash.startsWith("#ld=")) {
+      const n = findLdRecipe([decodeURIComponent(location.hash.slice(4))]);
+      if (n) sent = ldToRecipe(n, shared);
+    }
+  } catch (e) { console.warn(e); }
+  if (qs.has("url") || qs.has("text") || qs.has("s") || location.hash.startsWith("#ld=")) {
     history.replaceState(null, "", location.pathname + (location.hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
     renderAll();
   }
