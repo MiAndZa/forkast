@@ -866,7 +866,7 @@ function parseRecipeText(text) {
    GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?s=<packed>: base64url of
    {u: page URL, r: the Recipe's fields that ldToRecipe reads}. iOS Shortcuts' Open URLs scans text for links and opens
    every one it finds, so the packed part must contain no dots, slashes or % signs. */
-const APP_VERSION = "2026-10-30b"; // shown in Your data, so it's clear which version a device is running
+const APP_VERSION = "2026-10-30c"; // shown in Your data, so it's clear which version a device is running
 const READER_URL ="https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
@@ -1104,6 +1104,11 @@ async function downloadJson(data, name) {
   const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
+function lastLinkNote() {
+  let l; try { l = JSON.parse(localStorage.getItem("forkast-last-link")); } catch {}
+  if (!l) return "";
+  return `<br>Last shared link: ${esc(new Date(l.at).toLocaleString())}, ${l.len} characters, parts: ${esc(l.keys)}${l.hashLen ? `, # part ${l.hashLen}` : ""}. Starts “${esc(l.start)}”. Result: ${esc(l.result)}.`;
+}
 function openData() {
   const n = state.recipes.size;
   const m = openModal(`<div class="m-head"><h2>Your data</h2>${closeBtn}</div>
@@ -1113,7 +1118,7 @@ function openData() {
       <div class="field"><span class="lbl-s">Back up</span><div><button class="btn" type="button" id="expAll">Download backup</button></div><span class="hint">${n} recipe${n === 1 ? "" : "s"} with photos, plus every week's plan and shopping list, in one .json file you can import on another device.</span></div>
       <div class="field"><span class="lbl-s">Import</span><div><button class="btn" type="button" data-addmode="import">Import recipes…</button></div><span class="hint">From a backup, or recipes exported from <a href="${ARTIFACT_URL}" target="_blank" rel="noopener">Forkast on claude.ai</a>.</span></div>
       <div class="status" id="dataStatus"></div>
-      <p class="muted" style="font-size:12px;margin:0">Forkast version ${APP_VERSION}</p>
+      <p class="muted" style="font-size:12px;margin:0">Forkast version ${APP_VERSION}${lastLinkNote()}</p>
     </div>`, { narrow: true });
   drawDriveBox();
   $("#expAll", m).onclick = async () => {
@@ -1368,6 +1373,12 @@ $("#discRandom").onclick = () => runDisc("random");
 window.addEventListener("hashchange", () => { closeModal(); renderAll(); window.scrollTo(0, 0); });
 
 /* ---------------- Boot ---------------- */
+// The address as it arrived, before anything can change it. A summary of the last shared link is kept for "Your data",
+// to troubleshoot sharing from other apps.
+const startUrl = new URL(location.href);
+const LINK_LOG = "forkast-last-link";
+const logLink = result => { try { localStorage.setItem(LINK_LOG, JSON.stringify({ at: Date.now(), len: startUrl.href.length, keys: [...startUrl.searchParams.keys()].join(", ") || "none", hashLen: startUrl.hash.length, start: (startUrl.search + startUrl.hash).slice(0, 40), result })); } catch {} };
+if (startUrl.search || startUrl.hash.startsWith("#ld=")) logLink("received");
 try { const s = localStorage.getItem("larder-sort"); if (s) { state.lib.sort = s; $("#libSort").value = s; } } catch {}
 renderAll();
 
@@ -1380,11 +1391,11 @@ function startData() {
   catch (e) { console.warn(e); backend = memoryBackend; showStoreBanner("This browser won't let Forkast save anything (private browsing?), so changes are lost when you close the page."); }
   if (backend === localBackend && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   startData();
-  startSync();
+  try { startSync(); } catch (e) { console.warn("Sync:", e); }
   // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=,
   // and GRAB_JS sends the page and its own recipe data packed as ?s= (older copies of the script used ?url= and #ld=).
-  const qs = new URLSearchParams(location.search);
-  let shared = findUrl(qs.get("url")) || findUrl(qs.get("text")), sent = null;
+  const qs = startUrl.searchParams, hash = startUrl.hash;
+  let shared = findUrl(qs.get("url")) || findUrl(qs.get("text")), sent = null, failed = "";
   try {
     if (qs.get("s")) {
       // GRAB_JS drops base64's "=" padding; put it back, since not every browser's atob accepts it missing.
@@ -1392,19 +1403,18 @@ function startData() {
       const p = JSON.parse(decodeURIComponent(escape(atob(b + "===".slice((b.length + 3) % 4)))));
       shared = findUrl(p.u);
       if (p.r) sent = ldToRecipe(p.r, shared);
-    } else if (location.hash.startsWith("#ld=")) {
-      const n = findLdRecipe([decodeURIComponent(location.hash.slice(4))]);
+    } else if (hash.startsWith("#ld=")) {
+      const n = findLdRecipe([decodeURIComponent(hash.slice(4))]);
       if (n) sent = ldToRecipe(n, shared);
     }
-  } catch (e) {
-    console.warn(e);
-    openModal(`<div class="m-head"><h2>Couldn't read that recipe</h2>${closeBtn}</div><div class="m-body"><p style="margin:0">Forkast got a recipe from the page but couldn't unpack it (${esc(e.message || e)}). Forkast version ${APP_VERSION}.</p></div>`, { narrow: true });
-  }
-  if (qs.has("url") || qs.has("text") || qs.has("s") || location.hash.startsWith("#ld=")) {
-    history.replaceState(null, "", location.pathname + (location.hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
+  } catch (e) { console.warn(e); failed = String(e.message || e); }
+  if (qs.has("url") || qs.has("text") || qs.has("s") || hash.startsWith("#ld=")) {
+    history.replaceState(null, "", location.pathname + (hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
     renderAll();
+    logLink(failed ? "couldn't unpack: " + failed : sent ? "opened the recipe" : shared ? "read the page link" : "no recipe or link in it");
   }
-  if (sent) openEditor(sent, true); else if (shared) openAdd("link", shared);
+  if (failed) openModal(`<div class="m-head"><h2>Couldn't read that recipe</h2>${closeBtn}</div><div class="m-body"><p style="margin:0">Forkast got a recipe from the page but couldn't unpack it (${esc(failed)}). Forkast version ${APP_VERSION}.</p></div>`, { narrow: true });
+  else if (sent) openEditor(sent, true); else if (shared) openAdd("link", shared);
 })();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { store.refresh(); scheduleSync(0); } });
 if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("Service worker:", e)));
