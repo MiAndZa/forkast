@@ -866,7 +866,8 @@ function parseRecipeText(text) {
    GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?s=<packed>: base64url of
    {u: page URL, r: the Recipe's fields that ldToRecipe reads}. iOS Shortcuts' Open URLs scans text for links and opens
    every one it finds, so the packed part must contain no dots, slashes or % signs. */
-const READER_URL = "https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
+const APP_VERSION = "2026-10-30b"; // shown in Your data, so it's clear which version a device is running
+const READER_URL ="https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
 const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var p={u:location.href};if(r){var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);p.r={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||""}}return ${JSON.stringify(SHARE_BASE + "?s=")}+btoa(unescape(encodeURIComponent(JSON.stringify(p)))).replace(/\\+/g,"-").replace(/\\//g,"_").replace(/=+$/,"")})()`;
@@ -1112,6 +1113,7 @@ function openData() {
       <div class="field"><span class="lbl-s">Back up</span><div><button class="btn" type="button" id="expAll">Download backup</button></div><span class="hint">${n} recipe${n === 1 ? "" : "s"} with photos, plus every week's plan and shopping list, in one .json file you can import on another device.</span></div>
       <div class="field"><span class="lbl-s">Import</span><div><button class="btn" type="button" data-addmode="import">Import recipes…</button></div><span class="hint">From a backup, or recipes exported from <a href="${ARTIFACT_URL}" target="_blank" rel="noopener">Forkast on claude.ai</a>.</span></div>
       <div class="status" id="dataStatus"></div>
+      <p class="muted" style="font-size:12px;margin:0">Forkast version ${APP_VERSION}</p>
     </div>`, { narrow: true });
   drawDriveBox();
   $("#expAll", m).onclick = async () => {
@@ -1385,14 +1387,19 @@ function startData() {
   let shared = findUrl(qs.get("url")) || findUrl(qs.get("text")), sent = null;
   try {
     if (qs.get("s")) {
-      const p = JSON.parse(decodeURIComponent(escape(atob(qs.get("s").replace(/-/g, "+").replace(/_/g, "/")))));
+      // GRAB_JS drops base64's "=" padding; put it back, since not every browser's atob accepts it missing.
+      const b = qs.get("s").replace(/[^A-Za-z0-9_-]/g, "").replace(/-/g, "+").replace(/_/g, "/");
+      const p = JSON.parse(decodeURIComponent(escape(atob(b + "===".slice((b.length + 3) % 4)))));
       shared = findUrl(p.u);
       if (p.r) sent = ldToRecipe(p.r, shared);
     } else if (location.hash.startsWith("#ld=")) {
       const n = findLdRecipe([decodeURIComponent(location.hash.slice(4))]);
       if (n) sent = ldToRecipe(n, shared);
     }
-  } catch (e) { console.warn(e); }
+  } catch (e) {
+    console.warn(e);
+    openModal(`<div class="m-head"><h2>Couldn't read that recipe</h2>${closeBtn}</div><div class="m-body"><p style="margin:0">Forkast got a recipe from the page but couldn't unpack it (${esc(e.message || e)}). Forkast version ${APP_VERSION}.</p></div>`, { narrow: true });
+  }
   if (qs.has("url") || qs.has("text") || qs.has("s") || location.hash.startsWith("#ld=")) {
     history.replaceState(null, "", location.pathname + (location.hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
     renderAll();
