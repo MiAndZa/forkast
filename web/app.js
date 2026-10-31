@@ -763,13 +763,20 @@ function drawLinkAdd(m, url = "") {
       <div style="display:flex;gap:8px"><input type="url" id="linkUrl" inputmode="url" autocomplete="off" placeholder="https://www.example.com/best-chili" value="${esc(url)}" style="flex:1;min-width:0">${canPaste ? `<button class="btn" type="button" id="linkPaste">Paste</button>` : ""}</div>
       <span class="hint">Forkast reads the recipe from the page. You check everything before saving.</span></div>
     <div class="status" id="linkStatus"></div>
-    <details class="muted" style="font-size:14px"><summary>Send links from other apps</summary>
-      <p><b>iPhone or iPad:</b> in the Shortcuts app, make a shortcut that shows in the Share Sheet, receives URLs, and runs <b>Open URLs</b> with <code>${esc(SHARE_BASE)}?url=</code> followed by <b>Shortcut Input</b>. Then share any recipe page to it.</p>
-      <p><b>Android:</b> install Forkast to your home screen, then pick Forkast in the share menu.</p>
+    <details class="muted" style="font-size:14px"><summary>Add straight from a recipe page</summary>
+      <p>These send the recipe from the page you have open, so they also work on sites that block readers, like Allrecipes.</p>
+      <p><b>iPhone or iPad</b> (Shortcuts app): tap <b>+</b> to make a shortcut named <b>Add to Forkast</b>. Add the action <b>Run JavaScript on Web Page</b>, replace its code with the script below, then add <b>Open URLs</b> (it uses the JavaScript Result). In the shortcut's ⓘ settings, turn on <b>Show in Share Sheet</b>. On a recipe page in Safari, tap Share → Add to Forkast.
+      <span style="display:flex;gap:8px;margin-top:6px"><button class="btn sm" type="button" id="copyShortcut">Copy script</button></span></p>
       <p><b>Computer:</b> drag this to your bookmarks bar, then click it on a recipe page: <a class="btn sm" href="${esc(BOOKMARKLET)}" onclick="return false">Add to Forkast</a></p>
+      <p><b>Android:</b> install Forkast to your home screen, then pick Forkast in the share menu.</p>
+      <p>Recipes sent this way open in the browser. Connect Google Drive there too, and they sync to your Forkast app.</p>
     </details>${aiTip}`;
   foot.innerHTML = `<button class="btn primary" type="button" id="linkGo">Read recipe</button>`;
   const inp = $("#linkUrl", m), st = $("#linkStatus", m), btn = $("#linkGo", m);
+  $("#copyShortcut", m).onclick = async e => {
+    try { await navigator.clipboard.writeText(SHORTCUT_JS); toast("Script copied"); }
+    catch { e.target.parentElement.innerHTML = `<textarea rows="4" readonly style="width:100%">${esc(SHORTCUT_JS)}</textarea>`; }
+  };
   if ($("#linkPaste", m)) $("#linkPaste", m).onclick = async () => {
     try { const t = await navigator.clipboard.readText(); const u = findUrl(t); inp.value = u || t.trim(); if (u) go(); } catch { inp.focus(); }
   };
@@ -853,12 +860,16 @@ function parseRecipeText(text) {
 
 /* ---------------- Reading a recipe from a web link ----------------
    A static site can't load other sites' pages itself, so pages come through a reader:
-   your own Google Apps Script (READER_URL, see reader/Code.gs) when it's set, then Jina's free reader (r.jina.ai).
-   Most recipe sites include schema.org Recipe data, which is used first; otherwise the page text goes through parseRecipeText. */
-const READER_URL = "";
+   your own Google Apps Script (READER_URL, see reader/Code.gs), then Jina's free reader (r.jina.ai).
+   Most recipe sites include schema.org Recipe data, which is used first; otherwise the page text goes through parseRecipeText.
+   Sites that block readers (the Allrecipes family answers 402) can still be sent from the user's own browser:
+   GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?url= and #ld=<the Recipe JSON>. */
+const READER_URL = "https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
-const BOOKMARKLET = `javascript:location.href=${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href)`;
+const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});return ${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href)+(r?"#ld="+encodeURIComponent(JSON.stringify(r)):"")})()`;
+const BOOKMARKLET = `javascript:void(location.href=${GRAB_JS})`;
+const SHORTCUT_JS = `completion(${GRAB_JS});`;
 const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
 
 async function fetchTimeout(url, opts = {}, ms = 30000) {
@@ -872,7 +883,7 @@ async function readRecipeLink(url, say) {
     say("Opening the page…");
     try {
       const j = await (await fetchTimeout(READER_URL + "?url=" + encodeURIComponent(url))).json();
-      const rec = findLdRecipe(j.ld || []);
+      const rec = j.status < 400 && findLdRecipe(j.ld || []);
       if (rec) return ldToRecipe(rec, url, j.image);
       if (j.status < 400 && j.text) fallbackText = (j.title ? j.title + "\n" : "") + htmlText(j.text);
     } catch (e) { console.warn("Reader:", e); }
@@ -890,7 +901,7 @@ async function readRecipeLink(url, say) {
     }
   } catch (e) { console.warn("Jina:", e); }
   if (fallbackText) { const r = parseRecipeText(fallbackText); if (r.ingredients.length) return { ...r, source: "link", sourceUrl: url }; }
-  throw new Error("Couldn't find a recipe on that page. Some sites block readers: open the page, copy the recipe, and use Paste text.");
+  throw new Error("Couldn't read a recipe from that page. Some sites (like Allrecipes) block readers: open the page and use your Add to Forkast shortcut or bookmark there, or copy the recipe and use Paste.");
 }
 
 // schema.org Recipe, found anywhere in the page's JSON-LD (plain, in an array, in @graph or as mainEntity).
@@ -1366,10 +1377,16 @@ function startData() {
   if (backend === localBackend && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   startData();
   startSync();
-  // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=.
+  // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=,
+  // and GRAB_JS adds the page's own recipe data as #ld=.
   const qs = new URLSearchParams(location.search), shared = findUrl(qs.get("url")) || findUrl(qs.get("text"));
-  if (qs.has("url") || qs.has("text")) history.replaceState(null, "", location.pathname + (location.hash || "#recipes"));
-  if (shared) openAdd("link", shared);
+  let sent = null;
+  if (location.hash.startsWith("#ld=")) { try { const n = findLdRecipe([decodeURIComponent(location.hash.slice(4))]); if (n) sent = ldToRecipe(n, shared); } catch (e) { console.warn(e); } }
+  if (qs.has("url") || qs.has("text") || location.hash.startsWith("#ld=")) {
+    history.replaceState(null, "", location.pathname + (location.hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
+    renderAll();
+  }
+  if (sent) openEditor(sent, true); else if (shared) openAdd("link", shared);
 })();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { store.refresh(); scheduleSync(0); } });
 if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("Service worker:", e)));

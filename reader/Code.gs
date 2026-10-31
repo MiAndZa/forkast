@@ -1,11 +1,12 @@
 // Forkast page reader: an optional Google Apps Script web app that opens recipe pages for Forkast.
-// Some sites (Allrecipes, Serious Eats, Simply Recipes…) block the free reader Forkast uses by default.
-// This runs under your own Google account instead, and returns only what Forkast needs from the page
+// It runs under your own Google account and returns only what Forkast needs from the page
 // (its recipe data, title, photo and plain text), not the page itself.
 //
 // Set up: script.google.com → New project → paste this file → Deploy → New deployment → type "Web app",
 // Execute as "Me", Who has access "Anyone" → Deploy, approve access, and copy the web app URL
-// (ending in /exec) into READER_URL in web/app.js.
+// (ending in /exec) into READER_URL in web/app.js. To change this script later, paste the new version and use
+// Deploy → Manage deployments → edit (pencil) → Version: New version, so the URL stays the same.
+// Some sites (the Allrecipes family) refuse automated readers with 402; Forkast gets those from the user's browser instead.
 
 function doGet(e) {
   var url = String((e && e.parameter && e.parameter.url) || "");
