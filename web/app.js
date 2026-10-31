@@ -770,12 +770,12 @@ function drawLinkAdd(m, url = "") {
         <li>Make a new shortcut named <b>Add to Forkast</b>.</li>
         <li>Turn on its option to appear in the <b>Share Sheet</b>, and let it receive <b>Safari web pages</b>.</li>
         <li>Add the action <b>Run JavaScript on Web Page</b> (search “JavaScript”). Its page should be the <b>Shortcut Input</b>. Delete all of its sample code and paste the script: <button class="btn sm" type="button" id="copyShortcut">Copy script</button></li>
-        <li>Add the action <b>Open URLs</b>. What it opens should be the <b>JavaScript Result</b>.</li>
-        <li>Use it from <b>Safari</b>: on a recipe page, tap Share, then Add to Forkast. Running it from the Shortcuts app doesn't work, because there's no page to read.</li>
+        <li>Add the action <b>Copy to Clipboard</b>, copying the <b>JavaScript Result</b>.</li>
+        <li>Use it from <b>Safari</b>: on a recipe page, tap Share, then Add to Forkast. Then come back here and tap <b>Paste</b> above. (Running it from the Shortcuts app doesn't work, because there's no page to read.)</li>
       </ol>
       <p><b>Computer:</b> drag this to your bookmarks bar, then click it on a recipe page: <a class="btn sm" href="${esc(BOOKMARKLET)}" onclick="return false">Add to Forkast</a></p>
       <p><b>Android:</b> install Forkast to your home screen, then pick Forkast in the share menu.</p>
-      <p>Recipes sent this way open in the browser. Connect Google Drive there too, and they sync to your Forkast app.</p>
+      <p>The bookmark opens Forkast in that browser. If you also use the installed app, connect Google Drive in both, and recipes sync between them.</p>
     </details>${aiTip}`;
   foot.innerHTML = `<button class="btn primary" type="button" id="linkGo">Read recipe</button>`;
   const inp = $("#linkUrl", m), st = $("#linkStatus", m), btn = $("#linkGo", m);
@@ -787,6 +787,8 @@ function drawLinkAdd(m, url = "") {
     try { const t = await navigator.clipboard.readText(); const u = findUrl(t); inp.value = u || t.trim(); if (u) go(); } catch { inp.focus(); }
   };
   const go = async () => {
+    const sent = sentRecipe(inp.value);
+    if (sent) { openEditor(sent, true); return; }
     const u = findUrl(inp.value);
     if (!u) { st.className = "status err"; st.textContent = "Enter a web link that starts with https://"; inp.focus(); return; }
     inp.value = u; btn.disabled = true;
@@ -877,6 +879,13 @@ const SHARE_BASE = new URL("./", location.href).href;
 const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var u=${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href);if(!r)return u;var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);var im=[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||"";var c={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:im};return u+"#ld="+encodeURIComponent(JSON.stringify(c))})()`;
 const BOOKMARKLET = `javascript:void(location.href=${GRAB_JS})`;
 const SHORTCUT_JS = `completion(${GRAB_JS});`;
+// A Forkast link made by GRAB_JS (opened, or copied by the iOS shortcut and pasted): ?url=<page>#ld=<Recipe JSON>.
+function sentRecipe(t) {
+  const m = String(t || "").match(/[?&]url=([^#&\s]*)[^#\s]*#ld=(\S+)/);
+  if (!m) return null;
+  try { const n = findLdRecipe([decodeURIComponent(m[2])]); return n ? ldToRecipe(n, decodeURIComponent(m[1])) : null; }
+  catch (e) { console.warn(e); return null; }
+}
 const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
 
 async function fetchTimeout(url, opts = {}, ms = 30000) {
@@ -1387,8 +1396,7 @@ function startData() {
   // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=,
   // and GRAB_JS adds the page's own recipe data as #ld=.
   const qs = new URLSearchParams(location.search), shared = findUrl(qs.get("url")) || findUrl(qs.get("text"));
-  let sent = null;
-  if (location.hash.startsWith("#ld=")) { try { const n = findLdRecipe([decodeURIComponent(location.hash.slice(4))]); if (n) sent = ldToRecipe(n, shared); } catch (e) { console.warn(e); } }
+  const sent = sentRecipe(location.href);
   if (qs.has("url") || qs.has("text") || location.hash.startsWith("#ld=")) {
     history.replaceState(null, "", location.pathname + (location.hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
     renderAll();
