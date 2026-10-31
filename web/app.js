@@ -734,24 +734,58 @@ async function resizeImage(file, max = 1600, q = 0.85) {
 async function blobToDataUrl(blob) { return new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(blob); }); }
 async function dataUrlToBlob(u) { return (await fetch(u)).blob(); }
 
-/* Photo and link reading need Claude, so they stay in the claude.ai version of Forkast; recipes come across through Export / Import. */
+/* Handwritten recipes and pages no reader can open read best with Claude, in the claude.ai version of Forkast; recipes come across through Export / Import. */
 const ARTIFACT_URL = "https://claude.ai/artifact/MAHqYJJTxErbmnriGsY1MN";
-const aiTip = `<div class="banner" style="margin:0"><span>Want a recipe read for you from a photo or a web link? Open <a href="${ARTIFACT_URL}" target="_blank" rel="noopener">Forkast on claude.ai ↗</a>, add it there, tap <b>Export</b>, then bring it in with <b>Import</b> here.</span></div>`;
+const aiTip = `<div class="banner" style="margin:0"><span>Need Claude to read a tricky photo or page? Open <a href="${ARTIFACT_URL}" target="_blank" rel="noopener">Forkast on claude.ai ↗</a>, add it there, tap <b>Export</b>, then bring it in with <b>Import</b> here.</span></div>`;
 
 function addModalShell(mode) {
   return openModal(`<div class="m-head"><h2>Add a recipe</h2>${closeBtn}</div>
     <div class="tabs2" role="tablist">
-      <button role="tab" type="button" data-amode="paste" aria-selected="${mode === "paste"}">Paste text</button>
-      <button role="tab" type="button" data-amode="manual" aria-selected="false">Type it in</button>
+      <button role="tab" type="button" data-amode="link" aria-selected="${mode === "link"}">Link</button>
+      <button role="tab" type="button" data-amode="paste" aria-selected="${mode === "paste"}">Paste</button>
+      <button role="tab" type="button" data-amode="manual" aria-selected="false">Type</button>
       <button role="tab" type="button" data-amode="photo" aria-selected="${mode === "photo"}">Photo</button>
       <button role="tab" type="button" data-amode="import" aria-selected="${mode === "import"}">Import</button>
     </div><div class="m-body" id="addBody"></div><div class="m-foot" id="addFoot"></div>`);
 }
-function openAdd(mode = "paste") {
+function openAdd(mode = "link", url = "") {
   if (mode === "manual") { clearPending(); return openEditor(null); }
-  if (!["paste", "photo", "import"].includes(mode)) mode = "paste";
+  if (!["link", "paste", "photo", "import"].includes(mode)) mode = "link";
   const m = addModalShell(mode);
-  ({ paste: drawPasteAdd, photo: drawPhotoAdd, import: drawImportAdd })[mode](m);
+  ({ link: drawLinkAdd, paste: drawPasteAdd, photo: drawPhotoAdd, import: drawImportAdd })[mode](m, url);
+}
+
+function drawLinkAdd(m, url = "") {
+  const body = $("#addBody", m), foot = $("#addFoot", m);
+  const canPaste = !!(navigator.clipboard && navigator.clipboard.readText);
+  body.innerHTML = `
+    <div class="field"><label for="linkUrl">Recipe link</label>
+      <div style="display:flex;gap:8px"><input type="url" id="linkUrl" inputmode="url" autocomplete="off" placeholder="https://www.example.com/best-chili" value="${esc(url)}" style="flex:1;min-width:0">${canPaste ? `<button class="btn" type="button" id="linkPaste">Paste</button>` : ""}</div>
+      <span class="hint">Forkast reads the recipe from the page. You check everything before saving.</span></div>
+    <div class="status" id="linkStatus"></div>
+    <details class="muted" style="font-size:14px"><summary>Send links from other apps</summary>
+      <p><b>iPhone or iPad:</b> in the Shortcuts app, make a shortcut that shows in the Share Sheet, receives URLs, and runs <b>Open URLs</b> with <code>${esc(SHARE_BASE)}?url=</code> followed by <b>Shortcut Input</b>. Then share any recipe page to it.</p>
+      <p><b>Android:</b> install Forkast to your home screen, then pick Forkast in the share menu.</p>
+      <p><b>Computer:</b> drag this to your bookmarks bar, then click it on a recipe page: <a class="btn sm" href="${esc(BOOKMARKLET)}" onclick="return false">Add to Forkast</a></p>
+    </details>${aiTip}`;
+  foot.innerHTML = `<button class="btn primary" type="button" id="linkGo">Read recipe</button>`;
+  const inp = $("#linkUrl", m), st = $("#linkStatus", m), btn = $("#linkGo", m);
+  if ($("#linkPaste", m)) $("#linkPaste", m).onclick = async () => {
+    try { const t = await navigator.clipboard.readText(); const u = findUrl(t); inp.value = u || t.trim(); if (u) go(); } catch { inp.focus(); }
+  };
+  const go = async () => {
+    const u = findUrl(inp.value);
+    if (!u) { st.className = "status err"; st.textContent = "Enter a web link that starts with https://"; inp.focus(); return; }
+    inp.value = u; btn.disabled = true;
+    try {
+      const r = await readRecipeLink(u, t => { st.className = "status"; st.innerHTML = `<span class="spin"></span>${esc(t)}`; });
+      if (overlay.firstElementChild !== m) return;
+      openEditor(r, true);
+    } catch (e) { st.className = "status err"; st.textContent = e.message || "Couldn't read that page."; btn.disabled = false; }
+  };
+  btn.onclick = go;
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+  if (url) go(); else setTimeout(() => inp.focus(), 40);
 }
 
 function drawPasteAdd(m) {
@@ -768,6 +802,7 @@ function drawPasteAdd(m) {
     if (!txt) { const st = $("#pasteStatus", m); st.className = "status err"; st.textContent = "Paste the recipe text first."; return; }
     const exp = parseExport(txt);
     if (exp) { runImport(exp, $("#pasteStatus", m)); return; }
+    if (/^\S+$/.test(txt) && findUrl(txt)) { drawLinkAdd(addModalShell("link"), findUrl(txt)); return; }
     openEditor({ ...parseRecipeText(txt), source: url ? "link" : "manual", sourceUrl: url }, true);
   };
 }
@@ -814,6 +849,109 @@ function parseRecipeText(text) {
   } else if (intro.length) notes.unshift(intro.join(" ").slice(0, 1000));
   out.notes = notes.join("\n");
   return out;
+}
+
+/* ---------------- Reading a recipe from a web link ----------------
+   A static site can't load other sites' pages itself, so pages come through a reader:
+   your own Google Apps Script (READER_URL, see reader/Code.gs) when it's set, then Jina's free reader (r.jina.ai).
+   Most recipe sites include schema.org Recipe data, which is used first; otherwise the page text goes through parseRecipeText. */
+const READER_URL = "";
+const JINA = "https://r.jina.ai/";
+const SHARE_BASE = new URL("./", location.href).href;
+const BOOKMARKLET = `javascript:location.href=${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href)`;
+const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
+
+async function fetchTimeout(url, opts = {}, ms = 30000) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ctl.signal }); } finally { clearTimeout(t); }
+}
+async function readRecipeLink(url, say) {
+  if (navigator.onLine === false) throw new Error("You're offline. Connect to the internet to read a recipe link.");
+  let fallbackText = "";
+  if (READER_URL) {
+    say("Opening the page…");
+    try {
+      const j = await (await fetchTimeout(READER_URL + "?url=" + encodeURIComponent(url))).json();
+      const rec = findLdRecipe(j.ld || []);
+      if (rec) return ldToRecipe(rec, url, j.image);
+      if (j.status < 400 && j.text) fallbackText = (j.title ? j.title + "\n" : "") + htmlText(j.text);
+    } catch (e) { console.warn("Reader:", e); }
+  }
+  say("Reading the page… this can take a few seconds.");
+  try {
+    const res = await fetchTimeout(JINA + url, { headers: { "X-Return-Format": "html" } });
+    if (res.ok) {
+      const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+      const rec = findLdRecipe([...doc.querySelectorAll('script[type="application/ld+json"]')].map(s => s.textContent));
+      if (rec) return ldToRecipe(rec, url, doc.querySelector('meta[property="og:image"]')?.content);
+      const md = await (await fetchTimeout(JINA + url)).text();
+      const r = parseRecipeText(mdRecipeText(md));
+      if (r.ingredients.length && r.steps.length) return { ...r, source: "link", sourceUrl: url };
+    }
+  } catch (e) { console.warn("Jina:", e); }
+  if (fallbackText) { const r = parseRecipeText(fallbackText); if (r.ingredients.length) return { ...r, source: "link", sourceUrl: url }; }
+  throw new Error("Couldn't find a recipe on that page. Some sites block readers: open the page, copy the recipe, and use Paste text.");
+}
+
+// schema.org Recipe, found anywhere in the page's JSON-LD (plain, in an array, in @graph or as mainEntity).
+function findLdRecipe(blocks) {
+  const walk = n => {
+    if (!n || typeof n !== "object") return null;
+    if (Array.isArray(n)) { for (const x of n) { const r = walk(x); if (r) return r; } return null; }
+    if ([].concat(n["@type"] || []).some(t => /^(schema:)?Recipe$/i.test(t))) return n;
+    return walk(n["@graph"]) || walk(n.mainEntity);
+  };
+  for (const b of blocks) { try { const r = walk(JSON.parse(String(b).replace(/[\u0000-\u001f]+/g, " "))); if (r) return r; } catch {} }
+  return null;
+}
+const decodeEl = document.createElement("textarea");
+function htmlText(s) { decodeEl.innerHTML = String(s || "").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " "); return decodeEl.value.replace(/[ \t ]+/g, " ").trim(); }
+// ISO 8601 durations such as PT1H30M or P0Y0M0DT1H50M0.000S, in minutes.
+function durMins(s) {
+  const [date, time = ""] = String(s || "").toUpperCase().split("T");
+  if (date[0] !== "P") return 0;
+  const n = (str, u) => +(str.match(new RegExp("(\\d+)" + u)) || [])[1] || 0;
+  return n(date, "D") * 1440 + n(time, "H") * 60 + n(time, "M");
+}
+function fmtMins(mins) { const h = Math.floor(mins / 60), mm = mins % 60; return [h && `${h} hr`, mm && `${mm} min`].filter(Boolean).join(" "); }
+function ldToRecipe(n, url, pageImage) {
+  const list = v => (v == null ? [] : Array.isArray(v) ? v : [v]);
+  const steps = [];
+  const addSteps = v => {
+    for (const x of list(v)) {
+      if (typeof x === "string") htmlText(x).split(/\n+/).forEach(s => { s = stripStepNo(s); if (s) steps.push(s); });
+      else if (x && x.itemListElement) addSteps(x.itemListElement);
+      else if (x && (x.text || x.name)) { const s = stripStepNo(htmlText(x.text || x.name)); if (s) steps.push(s); }
+    }
+  };
+  addSteps(n.recipeInstructions);
+  const yields = list(n.recipeYield).map(String).find(y => /\d/.test(y)) || "";
+  const tags = [...list(n.recipeCategory), ...list(n.recipeCuisine), ...list(n.keywords).flatMap(k => String(k).split(","))]
+    .map(t => htmlText(t).toLowerCase()).filter(t => t && t.length <= 24);
+  const img = list(n.image).map(i => typeof i === "string" ? i : i && i.url).find(Boolean) || pageImage || "";
+  return {
+    title: htmlText(n.name), servings: +(yields.match(/\d+/) || [])[0] || null,
+    totalTime: fmtMins(durMins(n.totalTime) || durMins(n.prepTime) + durMins(n.cookTime)),
+    ingredients: list(n.recipeIngredient || n.ingredients).map(htmlText).filter(Boolean),
+    steps, tags: [...new Set(tags)].slice(0, 5), notes: htmlText(n.description).slice(0, 600),
+    source: "link", sourceUrl: url, thumbUrl: /^https?:/i.test(img) ? img : "",
+  };
+}
+
+// Jina's markdown of a whole page, cut down to the title plus the part from the ingredients to the end of the steps.
+function mdRecipeText(md) {
+  const title = (md.match(/^Title:\s*(.+)$/m) || [])[1] || "";
+  const lines = (md.split(/^Markdown Content:\s*$/m)[1] ?? md)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\*\*|__/g, "").split("\n");
+  const head = l => { const h = l.match(/^(#{1,6})\s+(.*)$/); return h ? { lvl: h[1].length, txt: h[2].trim() } : null; };
+  // The recipe card is usually the last "Ingredients" heading that has a steps heading after it.
+  let ing = -1, step = -1;
+  for (let i = 0; i < lines.length; i++) { const h = head(lines[i]); if (h && H_ING.test(h.txt)) for (let j = i + 1; j < lines.length; j++) { const k = head(lines[j]); if (k && H_STEP.test(k.txt)) { ing = i; step = j; break; } } }
+  if (ing < 0) return title + "\n" + lines.join("\n");
+  let end = lines.length;
+  const lvl = head(lines[step]).lvl;
+  for (let j = step + 1; j < lines.length; j++) { const h = head(lines[j]); if (h && h.lvl <= lvl && !H_NOTE.test(h.txt)) { end = j; break; } }
+  return title + "\n" + lines.slice(ing, end).map(l => l.replace(/^\s*[*+-]\s+/, "• ")).join("\n");
 }
 
 function drawPhotoAdd(m) {
@@ -995,11 +1133,11 @@ function openEditor(r, keepImages = false) {
     <div class="m-foot"><span class="status" id="edStatus" style="margin-right:auto"></span><button class="btn ghost" type="button" data-close>Cancel</button><button class="btn primary" type="button" id="edSave">Save recipe</button></div>`);
   let rating = r.rating || 0;
   let keptIds = [...(r.imageIds || [])];
-  let keepThumb = !!r.thumbData;
+  let keepThumb = !!(r.thumbData || r.thumbUrl);
   const drawThumbs = () => {
     $("#edThumbs", m).innerHTML =
       keptIds.map(id => `<figure><img src="${esc(imgUrls.get(id) || "")}" alt=""><button type="button" data-rmkept="${esc(id)}" aria-label="Remove photo">×</button></figure>`).join("") +
-      (keepThumb && !keptIds.length ? `<figure><img src="${esc(r.thumbData)}" alt=""><button type="button" data-rmthumb aria-label="Remove photo">×</button></figure>` : "") +
+      (keepThumb && !keptIds.length ? `<figure><img src="${esc(r.thumbData || r.thumbUrl)}" alt=""><button type="button" data-rmthumb aria-label="Remove photo">×</button></figure>` : "") +
       pendingImages.map((p, i) => `<figure><img src="${p.url}" alt=""><button type="button" data-rmpend="${i}" aria-label="Remove photo">×</button></figure>`).join("");
   };
   drawThumbs();
@@ -1028,7 +1166,8 @@ function openEditor(r, keepImages = false) {
     });
     const removed = (r.imageIds || []).filter(x => !keptIds.includes(x));
     rec.imageIds = keptIds;
-    if (!keepThumb) delete rec.thumbData;
+    if (!keepThumb) { delete rec.thumbData; delete rec.thumbUrl; }
+    else if (isNew && r.thumbUrl) rec.thumbUrl = r.thumbUrl;
     if (pendingImages.length) {
       st.className = "status"; st.innerHTML = `<span class="spin"></span>Saving photos…`;
       for (const p of pendingImages) { try { rec.imageIds.push(await backend.putImage(p.blob)); } catch (e) { console.warn(e); } }
@@ -1185,7 +1324,7 @@ document.addEventListener("change", e => {
   const t = e.target;
   if (t.dataset && t.dataset.got) { const k = t.dataset.got; if (t.checked) state.shop.status[k] = "got"; else delete state.shop.status[k]; saveShop(); renderAll(); }
 });
-$("#addRecipeBtn").onclick = () => openAdd("paste");
+$("#addRecipeBtn").onclick = () => openAdd("link");
 $("#dataBtn").onclick = openData;
 $("#prevWeek").onclick = () => { state.weekOf = isoDate(addDays(parseIso(state.weekOf), -7)); watchWeek(); };
 $("#nextWeek").onclick = () => { state.weekOf = isoDate(addDays(parseIso(state.weekOf), 7)); watchWeek(); };
@@ -1227,6 +1366,10 @@ function startData() {
   if (backend === localBackend && navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   startData();
   startSync();
+  // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=.
+  const qs = new URLSearchParams(location.search), shared = findUrl(qs.get("url")) || findUrl(qs.get("text"));
+  if (qs.has("url") || qs.has("text")) history.replaceState(null, "", location.pathname + (location.hash || "#recipes"));
+  if (shared) openAdd("link", shared);
 })();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { store.refresh(); scheduleSync(0); } });
 if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("Service worker:", e)));

@@ -172,6 +172,7 @@ textarea { width: 100%; resize: vertical; line-height: 1.5 }
 .tabs2 { display: flex; gap: 4px; border-bottom: 1px solid var(--line); padding: 0 16px; overflow-x: auto }
 .tabs2 button { border: 0; background: transparent; padding: 10px 12px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap }
 .tabs2 button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent) }
+@media (max-width: 400px) { .tabs2 { gap: 0; padding: 0 8px } }
 .drop { border: 2px dashed var(--line); border-radius: var(--r); padding: 28px 16px; text-align: center; color: var(--muted); background: var(--bg) }
 .drop.over { border-color: var(--accent); color: var(--accent) }
 .drop b { color: var(--ink); display: block; font-size: 16px; margin-bottom: 4px }
