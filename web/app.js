@@ -869,12 +869,12 @@ function parseRecipeText(text) {
    your own Google Apps Script (READER_URL, see reader/Code.gs), then Jina's free reader (r.jina.ai).
    Most recipe sites include schema.org Recipe data, which is used first; otherwise the page text goes through parseRecipeText.
    Sites that block readers (the Allrecipes family answers 402) can still be sent from the user's own browser:
-   GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?url= and #ld=<the Recipe JSON>. */
+   GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?url= and &ld=<the Recipe JSON>. */
 const READER_URL = "https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
 // It sends only the fields ldToRecipe reads, so the link stays short (iOS Shortcuts rejects very long ones).
-const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var u=${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href);if(!r)return u;var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);var im=[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||"";var c={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:im};return u+"#ld="+encodeURIComponent(JSON.stringify(c))})()`;
+const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var u=${JSON.stringify(SHARE_BASE + "?url=")}+encodeURIComponent(location.href);if(!r)return u;var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);var im=[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||"";var c={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:im};return u+"&ld="+encodeURIComponent(JSON.stringify(c))})()`;
 const BOOKMARKLET = `javascript:void(location.href=${GRAB_JS})`;
 const SHORTCUT_JS = `completion(${GRAB_JS});`;
 const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
@@ -1385,10 +1385,17 @@ function startData() {
   startData();
   startSync();
   // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=,
-  // and GRAB_JS adds the page's own recipe data as #ld=.
-  const qs = new URLSearchParams(location.search), shared = findUrl(qs.get("url")) || findUrl(qs.get("text"));
-  let sent = null;
-  if (location.hash.startsWith("#ld=")) { try { const n = findLdRecipe([decodeURIComponent(location.hash.slice(4))]); if (n) sent = ldToRecipe(n, shared); } catch (e) { console.warn(e); } }
+  // and GRAB_JS adds the page's own recipe data as &ld= (older copies of the script used #ld=). iOS Shortcuts' Open URLs
+  // can encode that # as %23, which glues the data onto the url parameter, so look there too.
+  const qs = new URLSearchParams(location.search);
+  const [pageUrl, glued = ""] = String(qs.get("url") || "").split(/#ld=/);
+  const shared = findUrl(pageUrl) || findUrl(qs.get("text"));
+  let ld = qs.get("ld") || (location.hash.startsWith("#ld=") ? location.hash.slice(4) : "") || glued, sent = null;
+  try {
+    for (let i = 0; i < 3 && /^%/.test(ld); i++) ld = decodeURIComponent(ld);
+    const n = ld && findLdRecipe([ld]);
+    if (n) sent = ldToRecipe(n, shared);
+  } catch (e) { console.warn(e); }
   if (qs.has("url") || qs.has("text") || location.hash.startsWith("#ld=")) {
     history.replaceState(null, "", location.pathname + (location.hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
     renderAll();
