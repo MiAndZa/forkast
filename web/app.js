@@ -765,7 +765,7 @@ function drawLinkAdd(m, url = "") {
     <div class="status" id="linkStatus"></div>
     <details class="muted" style="font-size:14px"><summary>Add straight from a recipe page</summary>
       <p>These send the recipe from the page you have open, so they also work on sites that block readers, like Allrecipes.</p>
-      <p><b>iPhone or iPad</b> (Shortcuts app): tap <b>+</b> to make a shortcut named <b>Add to Forkast</b>. Add the action <b>Run JavaScript on Web Page</b>, replace its code with the script below, then add <b>Open URLs</b> (it uses the JavaScript Result). In the shortcut's ⓘ settings, turn on <b>Show in Share Sheet</b>. On a recipe page in Safari, tap Share → Add to Forkast.
+      <p><b>iPhone or iPad</b> (Shortcuts app): tap <b>+</b> to make a shortcut named <b>Add to Forkast</b>. Its only action is <b>Run JavaScript on Web Page</b>, running on the <b>Shortcut Input</b>: replace its code with the script below. Don't add Open URLs; the script opens Forkast itself. In the shortcut's settings, turn on <b>Show in Share Sheet</b>. On a recipe page in Safari, tap Share → Add to Forkast, and that tab turns into Forkast with the recipe ready to save.
       <span style="display:flex;gap:8px;margin-top:6px"><button class="btn sm" type="button" id="copyShortcut">Copy script</button></span></p>
       <p><b>Computer:</b> drag this to your bookmarks bar, then click it on a recipe page: <a class="btn sm" href="${esc(BOOKMARKLET)}" onclick="return false">Add to Forkast</a></p>
       <p><b>Android:</b> install Forkast to your home screen, then pick Forkast in the share menu.</p>
@@ -866,13 +866,15 @@ function parseRecipeText(text) {
    GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?s=<packed>: base64url of
    {u: page URL, r: the Recipe's fields that ldToRecipe reads}. iOS Shortcuts' Open URLs scans text for links and opens
    every one it finds, so the packed part must contain no dots, slashes or % signs. */
-const APP_VERSION = "2026-10-30c"; // shown in Your data, so it's clear which version a device is running
+const APP_VERSION = "2026-10-30d"; // shown in Your data, so it's clear which version a device is running
 const READER_URL ="https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
 const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var p={u:location.href};if(r){var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);p.r={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||""}}return ${JSON.stringify(SHARE_BASE + "?s=")}+btoa(unescape(encodeURIComponent(JSON.stringify(p)))).replace(/\\+/g,"-").replace(/\\//g,"_").replace(/=+$/,"")})()`;
 const BOOKMARKLET = `javascript:void(location.href=${GRAB_JS})`;
-const SHORTCUT_JS = `completion(${GRAB_JS});`;
+// The iOS shortcut is this one action: the script runs in the Safari tab itself and takes it to Forkast, like the bookmarklet.
+// (Handing the link to an Open URLs action failed: Shortcuts cut long links down to "…/forkast/?s".)
+const SHORTCUT_JS = `var u=${GRAB_JS};location.href=u;completion("Opening Forkast");`;
 const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
 
 async function fetchTimeout(url, opts = {}, ms = 30000) {
