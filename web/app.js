@@ -220,7 +220,7 @@ function loadImages() {
     if (imgUrls.has(id)) continue;
     imgUrls.set(id, "");
     backend.getImage(id).then(b => b || (backend === localBackend ? fetchDriveImage(id) : null)).then(b => {
-      if (!b) { imgUrls.delete(id); return; }
+      if (!b) { if (imgUrls.get(id) === "") imgUrls.delete(id); return; }
       imgUrls.set(id, URL.createObjectURL(b));
       if (!imgRenderQueued) { imgRenderQueued = true; setTimeout(() => { imgRenderQueued = false; renderAll(); }, 30); }
     }).catch(() => {});
@@ -241,7 +241,7 @@ const TOMBSTONE_DAYS = 90;
 const sync = {
   status: "off", // off | idle | syncing | offline | reconnect | error
   email: "", lastSync: 0, error: "", images: {},
-  token: "", tokenExp: 0, timer: null, running: null, again: false, imgTried: new Set(),
+  token: "", tokenExp: 0, timer: null, running: null, again: false, imgTried: new Set(), imgRetries: {}, imgError: "",
   changed() { scheduleSync(); },
 };
 const driveOn = () => !!GOOGLE_CLIENT_ID && backend === localBackend;
@@ -356,14 +356,30 @@ async function runSync() {
   await localBackend.kvSet("drive", st);
   Object.assign(sync, { lastSync: st.lastSync, images, error: "" });
   sync.imgTried.clear();
-  if (pulled) store.refresh();
+  // Photos this device still lacks get another try now that the list of Drive photos is fresh.
+  for (const [id, u] of imgUrls) if (!u) imgUrls.delete(id);
+  if (pulled) store.refresh(); else renderAll();
 }
 async function fetchDriveImage(id) {
   const im = sync.images[id];
   if (!im || !hasToken() || sync.imgTried.has(id)) return null;
   sync.imgTried.add(id);
   try { const b = await (await gfetch(`${DRIVE}/${im.fileId}?alt=media`)).blob(); await localBackend.putImage(b, id); return b; }
-  catch (e) { console.warn(e); return null; }
+  catch (e) {
+    console.warn(e); sync.imgError = e.message || String(e);
+    // Try again shortly, up to three times, instead of waiting for the next sync.
+    const n = (sync.imgRetries[id] || 0) + 1; sync.imgRetries[id] = n;
+    if (n <= 3) setTimeout(() => { sync.imgTried.delete(id); renderAll(); }, 15000 * n);
+    return null;
+  }
+}
+// For "Your data": how many recipe photos exist, are on this device and are listed in Drive.
+async function photoStatus() {
+  const ids = new Set(); for (const r of state.recipes.values()) (r.imageIds || []).forEach(id => ids.add(id));
+  let here = 0; for (const id of ids) if (await backend.getImage(id).catch(() => null)) here++;
+  const inDrive = [...ids].filter(id => sync.images[id]).length;
+  const web = [...state.recipes.values()].filter(r => !(r.imageIds || []).length && (r.thumbUrl || r.thumbData)).length;
+  return `Photos: ${ids.size} saved with recipes, ${here} on this device${sync.email ? `, ${inDrive} in Drive` : ""}. ${web} more recipe${web === 1 ? "" : "s"} show a photo from the web.${sync.imgError ? ` Last photo download error: ${sync.imgError}` : ""}`;
 }
 function scheduleSync(delay = 2500) { if (!sync.email || !driveOn()) return; clearTimeout(sync.timer); sync.timer = setTimeout(syncNow, delay); }
 function syncNow() {
@@ -866,7 +882,7 @@ function parseRecipeText(text) {
    GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?s=<packed>: base64url of
    {u: page URL, r: the Recipe's fields that ldToRecipe reads}. iOS Shortcuts' Open URLs scans text for links and opens
    every one it finds, so the packed part must contain no dots, slashes or % signs. */
-const APP_VERSION = "2026-10-30d"; // shown in Your data, so it's clear which version a device is running
+const APP_VERSION = "2026-11-04"; // shown in Your data, so it's clear which version a device is running
 const READER_URL ="https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
@@ -1120,9 +1136,10 @@ function openData() {
       <div class="field"><span class="lbl-s">Back up</span><div><button class="btn" type="button" id="expAll">Download backup</button></div><span class="hint">${n} recipe${n === 1 ? "" : "s"} with photos, plus every week's plan and shopping list, in one .json file you can import on another device.</span></div>
       <div class="field"><span class="lbl-s">Import</span><div><button class="btn" type="button" data-addmode="import">Import recipes…</button></div><span class="hint">From a backup, or recipes exported from <a href="${ARTIFACT_URL}" target="_blank" rel="noopener">Forkast on claude.ai</a>.</span></div>
       <div class="status" id="dataStatus"></div>
-      <p class="muted" style="font-size:12px;margin:0">Forkast version ${APP_VERSION}${lastLinkNote()}</p>
+      <p class="muted" style="font-size:12px;margin:0"><span id="photoStat"></span><br>Forkast version ${APP_VERSION}${lastLinkNote()}</p>
     </div>`, { narrow: true });
   drawDriveBox();
+  photoStatus().then(t => { if ($("#photoStat", m)) $("#photoStat", m).textContent = t; }).catch(() => {});
   $("#expAll", m).onclick = async () => {
     const st = $("#dataStatus", m); st.className = "status"; st.innerHTML = `<span class="spin"></span>Preparing backup…`;
     try { await downloadJson(await buildExport(), `forkast-backup-${isoDate(new Date())}.json`); st.textContent = ""; }
