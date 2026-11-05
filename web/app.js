@@ -879,18 +879,66 @@ function parseRecipeText(text) {
    your own Google Apps Script (READER_URL, see reader/Code.gs), then Jina's free reader (r.jina.ai).
    Most recipe sites include schema.org Recipe data, which is used first; otherwise the page text goes through parseRecipeText.
    Sites that block readers (the Allrecipes family answers 402) can still be sent from the user's own browser:
-   GRAB_JS runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with ?s=<packed>: base64url of
-   {u: page URL, r: the Recipe's fields that ldToRecipe reads}. iOS Shortcuts' Open URLs scans text for links and opens
-   every one it finds, so the packed part must contain no dots, slashes or % signs. */
-const APP_VERSION = "2026-11-04"; // shown in Your data, so it's clear which version a device is running
+   grabRecipe runs on the open page (as a bookmarklet, or in an iOS shortcut) and opens Forkast with #s=<packed> (after #,
+   so the server never sees it; GitHub Pages refuses long addresses): base64url of
+   {u: page URL, r: the Recipe's fields that ldToRecipe reads, photo?: a JPEG data URL}. The photo is copied there because
+   sites behind bot protection (the Allrecipes family) refuse their images to devices that haven't visited them. */
+const APP_VERSION = "2026-11-04b"; // shown in Your data, so it's clear which version a device is running
 const READER_URL ="https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
-const GRAB_JS = `(function(){var f=function(n){if(!n||typeof n!="object")return null;if(Array.isArray(n)){for(var i=0;i<n.length;i++){var r=f(n[i]);if(r)return r}return null}if([].concat(n["@type"]||[]).some(function(t){return /Recipe$/.test(t)}))return n;return f(n["@graph"])||f(n.mainEntity)};var r=null;document.querySelectorAll('script[type="application/ld+json"]').forEach(function(s){try{r=r||f(JSON.parse(s.textContent))}catch(e){}});var p={u:location.href};if(r){var st=[],a=function(v){[].concat(v||[]).forEach(function(x){if(typeof x=="string")st.push(x);else if(x&&x.itemListElement)a(x.itemListElement);else if(x&&(x.text||x.name))st.push(x.text||x.name)})};a(r.recipeInstructions);p.r={"@type":"Recipe",name:r.name,recipeIngredient:r.recipeIngredient||r.ingredients,recipeInstructions:st,recipeYield:r.recipeYield,totalTime:r.totalTime,prepTime:r.prepTime,cookTime:r.cookTime,recipeCategory:r.recipeCategory,recipeCuisine:r.recipeCuisine,keywords:r.keywords,description:String(r.description||"").slice(0,300),image:[].concat(r.image||[]).map(function(i){return typeof i=="string"?i:i&&i.url})[0]||""}}return ${JSON.stringify(SHARE_BASE + "?s=")}+btoa(unescape(encodeURIComponent(JSON.stringify(p)))).replace(/\\+/g,"-").replace(/\\//g,"_").replace(/=+$/,"")})()`;
-const BOOKMARKLET = `javascript:void(location.href=${GRAB_JS})`;
+// Runs on the recipe page, not in Forkast: its source is copied into the bookmarklet and the iOS shortcut, so it
+// must be self-contained, and use semicolons and no line comments (the bookmarklet is squeezed onto one line).
+function grabRecipe(base, done) {
+  var find = function (n) {
+    if (!n || typeof n != "object") return null;
+    if (Array.isArray(n)) { for (var i = 0; i < n.length; i++) { var x = find(n[i]); if (x) return x; } return null; }
+    if ([].concat(n["@type"] || []).some(function (t) { return /Recipe$/.test(t); })) return n;
+    return find(n["@graph"]) || find(n.mainEntity);
+  };
+  var r = null;
+  document.querySelectorAll('script[type="application/ld+json"]').forEach(function (s) { try { r = r || find(JSON.parse(s.textContent)); } catch (e) {} });
+  var p = { u: location.href }, sent = false;
+  var go = function () {
+    if (sent) return;
+    sent = true;
+    done(base + "#s=" + btoa(unescape(encodeURIComponent(JSON.stringify(p)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
+  };
+  if (!r) return go();
+  var steps = [], add = function (v) {
+    [].concat(v || []).forEach(function (x) {
+      if (typeof x == "string") steps.push(x);
+      else if (x && x.itemListElement) add(x.itemListElement);
+      else if (x && (x.text || x.name)) steps.push(x.text || x.name);
+    });
+  };
+  add(r.recipeInstructions);
+  var img = [].concat(r.image || []).map(function (i) { return typeof i == "string" ? i : i && i.url; })[0] || "";
+  p.r = { "@type": "Recipe", name: r.name, recipeIngredient: r.recipeIngredient || r.ingredients, recipeInstructions: steps,
+    recipeYield: r.recipeYield, totalTime: r.totalTime, prepTime: r.prepTime, cookTime: r.cookTime, recipeCategory: r.recipeCategory,
+    recipeCuisine: r.recipeCuisine, keywords: r.keywords, description: String(r.description || "").slice(0, 300), image: img };
+  if (!img) return go();
+  /* Copy the photo, shrunk to 400px. An image from another site can only be copied if that site allows it. */
+  var im = new Image();
+  try { if (new URL(img, location.href).origin != location.origin) im.crossOrigin = "anonymous"; } catch (e) {}
+  im.onload = function () {
+    try {
+      var k = Math.min(1, 400 / Math.max(im.naturalWidth, im.naturalHeight)), c = document.createElement("canvas");
+      c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+      c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+      p.photo = c.toDataURL("image/jpeg", 0.65);
+    } catch (e) {}
+    go();
+  };
+  im.onerror = go;
+  setTimeout(go, 5000);
+  im.src = img;
+}
+const GRAB_SRC = String(grabRecipe).replace(/\s*\n\s*/g, " ");
+const BOOKMARKLET = `javascript:void((${GRAB_SRC})(${JSON.stringify(SHARE_BASE)},function(u){location.href=u;}))`;
 // The iOS shortcut is this one action: the script runs in the Safari tab itself and takes it to Forkast, like the bookmarklet.
 // (Handing the link to an Open URLs action failed: Shortcuts cut long links down to "…/forkast/?s".)
-const SHORTCUT_JS = `var u=${GRAB_JS};location.href=u;completion("Opening Forkast");`;
+const SHORTCUT_JS = `(${GRAB_SRC})(${JSON.stringify(SHARE_BASE)},function(u){location.href=u;completion("Opening Forkast");});`;
 const findUrl = t => { const m = String(t || "").match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;!?]+$/, "") : ""; };
 
 async function fetchTimeout(url, opts = {}, ms = 30000) {
@@ -1397,7 +1445,7 @@ window.addEventListener("hashchange", () => { closeModal(); renderAll(); window.
 const startUrl = new URL(location.href);
 const LINK_LOG = "forkast-last-link";
 const logLink = result => { try { localStorage.setItem(LINK_LOG, JSON.stringify({ at: Date.now(), len: startUrl.href.length, keys: [...startUrl.searchParams.keys()].join(", ") || "none", hashLen: startUrl.hash.length, start: (startUrl.search + startUrl.hash).slice(0, 40), result })); } catch {} };
-if (startUrl.search || startUrl.hash.startsWith("#ld=")) logLink("received");
+if (startUrl.search || /^#(ld|s)=/.test(startUrl.hash)) logLink("received");
 try { const s = localStorage.getItem("larder-sort"); if (s) { state.lib.sort = s; $("#libSort").value = s; } } catch {}
 renderAll();
 
@@ -1412,28 +1460,48 @@ function startData() {
   startData();
   try { startSync(); } catch (e) { console.warn("Sync:", e); }
   // A link shared to Forkast (Android share menu, an iOS shortcut or the bookmarklet) arrives as ?url= or ?text=,
-  // and GRAB_JS sends the page and its own recipe data packed as ?s= (older copies of the script used ?url= and #ld=).
+  // and grabRecipe sends the page and its own recipe data packed as #s= (older copies of the script used ?s=, or ?url= and #ld=).
   const qs = startUrl.searchParams, hash = startUrl.hash;
-  let shared = findUrl(qs.get("url")) || findUrl(qs.get("text")), sent = null, failed = "";
+  const packed = qs.get("s") || (hash.startsWith("#s=") ? hash.slice(3) : "");
+  let shared = findUrl(qs.get("url")) || findUrl(qs.get("text")), sent = null, failed = "", photo = null;
   try {
-    if (qs.get("s")) {
-      // GRAB_JS drops base64's "=" padding; put it back, since not every browser's atob accepts it missing.
-      const b = qs.get("s").replace(/[^A-Za-z0-9_-]/g, "").replace(/-/g, "+").replace(/_/g, "/");
+    if (packed) {
+      // grabRecipe drops base64's "=" padding; put it back, since not every browser's atob accepts it missing.
+      const b = packed.replace(/[^A-Za-z0-9_-]/g, "").replace(/-/g, "+").replace(/_/g, "/");
       const p = JSON.parse(decodeURIComponent(escape(atob(b + "===".slice((b.length + 3) % 4)))));
       shared = findUrl(p.u);
       if (p.r) sent = ldToRecipe(p.r, shared);
+      if (sent && /^data:image\//.test(p.photo || "")) { photo = await dataUrlToBlob(p.photo); delete sent.thumbUrl; }
     } else if (hash.startsWith("#ld=")) {
       const n = findLdRecipe([decodeURIComponent(hash.slice(4))]);
       if (n) sent = ldToRecipe(n, shared);
     }
   } catch (e) { console.warn(e); failed = String(e.message || e); }
-  if (qs.has("url") || qs.has("text") || qs.has("s") || hash.startsWith("#ld=")) {
-    history.replaceState(null, "", location.pathname + (hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
+  if (qs.has("url") || qs.has("text") || packed || hash.startsWith("#ld=")) {
+    history.replaceState(null, "", location.pathname + (packed || hash.startsWith("#ld=") || !location.hash ? "#recipes" : location.hash));
     renderAll();
-    logLink(failed ? "couldn't unpack: " + failed : sent ? "opened the recipe" : shared ? "read the page link" : "no recipe or link in it");
+    logLink(failed ? "couldn't unpack: " + failed : sent ? `opened the recipe${photo ? " with its photo" : ""}` : shared ? "read the page link" : "no recipe or link in it");
   }
   if (failed) openModal(`<div class="m-head"><h2>Couldn't read that recipe</h2>${closeBtn}</div><div class="m-body"><p style="margin:0">Forkast got a recipe from the page but couldn't unpack it (${esc(failed)}). Forkast version ${APP_VERSION}.</p></div>`, { narrow: true });
-  else if (sent) openEditor(sent, true); else if (shared) openAdd("link", shared);
+  else if (sent) {
+    // Sending a recipe that's already in the box (same page) adds the copied photo to it instead of making a duplicate.
+    for (let i = 0; i < 30 && !state.recipesLoaded; i++) await new Promise(r => setTimeout(r, 100));
+    const have = sent.sourceUrl && [...state.recipes.values()].find(r => r.sourceUrl === sent.sourceUrl);
+    if (have) {
+      if (photo && !(have.imageIds || []).length) {
+        const rec = { ...have, imageIds: [await backend.putImage(photo)] };
+        delete rec.thumbUrl;
+        await saveRecipe(rec);
+        toast("Saved the photo with “" + have.title + "”");
+      } else toast("“" + have.title + "” is already in your recipes");
+      openDetail(have.id);
+      return;
+    }
+    // The copied photo is saved with the recipe like one you took, so it syncs to your other devices.
+    clearPending();
+    if (photo) pendingImages.push({ blob: photo, url: URL.createObjectURL(photo) });
+    openEditor(sent, true);
+  } else if (shared) openAdd("link", shared);
 })();
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { store.refresh(); scheduleSync(0); } });
 if ("serviceWorker" in navigator && window.isSecureContext) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(e => console.warn("Service worker:", e)));
