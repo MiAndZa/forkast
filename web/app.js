@@ -721,9 +721,12 @@ function openDetail(id) {
       </div>
     </div>
     <div class="m-foot"><span id="delWrap" style="margin-right:auto"><button class="btn ghost danger" type="button" id="delBtn">Delete</button></span>
+      <button class="btn" type="button" id="printBtn">Print</button>
       <button class="btn" type="button" id="cookedBtn">Cooked it</button>
       <button class="btn" type="button" id="editBtn">Edit</button>
       <button class="btn primary" type="button" data-planpick="${esc(r.id)}">Add to week</button></div>`);
+  preparePrint(recipePrintHtml(r));
+  $("#printBtn", m).onclick = () => printNow(r.title);
   $("#editBtn", m).onclick = () => openEditor(r);
   $("#cookedBtn", m).onclick = () => { r.timesCooked = (r.timesCooked || 0) + 1; r.lastCooked = Date.now(); saveRecipe(r); toast(`Logged: cooked ${r.timesCooked}×`); openDetail(id); };
   $("#delBtn", m).onclick = () => {
@@ -731,6 +734,41 @@ function openDetail(id) {
     $("#delYes", m).onclick = () => { deleteRecipe(id); closeModal(); toast("Recipe deleted"); };
     $("#delNo", m).onclick = () => openDetail(id);
   };
+}
+
+/* ---------- Printing ----------
+   #printArea holds a plain layout of what to print; the print styles hide everything else. It's filled ahead of time
+   where there are photos (when a recipe opens), so they've loaded by the time Print is tapped, and window.print() runs
+   straight from the tap, which iOS Safari requires. */
+function preparePrint(html) {
+  let a = $("#printArea");
+  if (!a) { a = document.createElement("div"); a.id = "printArea"; document.body.appendChild(a); }
+  a.innerHTML = html;
+}
+function printNow(title) {
+  const prev = document.title;
+  document.title = title; // becomes the file name when saving as PDF
+  document.body.classList.add("printing");
+  const done = () => { document.body.classList.remove("printing"); document.title = prev; window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  window.print();
+}
+function recipePrintHtml(r) {
+  const img = allImgs(r)[0];
+  const meta = [r.servings && `Serves ${r.servings}`, r.totalTime, r.sourceUrl && domainOf(r.sourceUrl)].filter(Boolean).map(esc).join(" · ");
+  return `<article class="p-recipe">
+    ${img ? `<img class="p-photo" src="${esc(img)}" alt="">` : ""}
+    <h1>${esc(r.title)}</h1>${meta ? `<p class="p-meta">${meta}</p>` : ""}
+    <h2>Ingredients</h2><ul class="p-ing">${(r.ingredients || []).map(x => `<li>${esc(typeof x === "string" ? x : x.raw)}</li>`).join("")}</ul>
+    ${(r.steps || []).length ? `<h2>Method</h2><ol class="p-steps">${r.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
+    ${r.notes ? `<h2>Notes</h2><p class="p-notes">${esc(r.notes)}</p>` : ""}
+    ${r.sourceUrl ? `<p class="p-src">${esc(r.sourceUrl)}</p>` : ""}
+  </article>`;
+}
+function shopPrintHtml(items) {
+  const groups = {}; items.forEach(i => (groups[i.aisle] ||= []).push(i));
+  return `<article class="p-shop"><h1>Shopping list</h1><p class="p-meta">Week of ${esc(fmtShort(parseIso(state.weekOf)))} · ${items.length} item${items.length === 1 ? "" : "s"}</p>
+    <div class="p-cols">${AISLE_ORDER.filter(a => groups[a]).map(a => `<section><h2>${esc(a)}</h2><ul class="p-check">${groups[a].map(i => `<li>${i.qty ? `<b>${esc(i.qty)}</b> ` : ""}${esc(i.name)}</li>`).join("")}</ul></section>`).join("")}</div></article>`;
 }
 
 /* ---------- Add recipe flow ---------- */
@@ -887,7 +925,7 @@ function parseRecipeText(text) {
    so the server never sees it; GitHub Pages refuses long addresses): base64url of
    {u: page URL, r: the Recipe's fields that ldToRecipe reads, photo?: a JPEG data URL}. The photo is copied there because
    sites behind bot protection (the Allrecipes family) refuse their images to devices that haven't visited them. */
-const APP_VERSION = "2026-11-04c"; // shown in Your data, so it's clear which version a device is running
+const APP_VERSION = "2026-11-04d"; // shown in Your data, so it's clear which version a device is running
 const READER_URL ="https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
@@ -1455,6 +1493,12 @@ $("#copyList").onclick = async () => {
   const txt = AISLE_ORDER.filter(a => groups[a]).map(a => a.toUpperCase() + "\n" + groups[a].map(i => `- ${i.qty ? i.qty + " " : ""}${i.name}`).join("\n")).join("\n\n");
   try { await navigator.clipboard.writeText(txt); toast("Shopping list copied"); }
   catch { openModal(`<div class="m-head"><h2>Copy your list</h2>${closeBtn}</div><div class="m-body"><textarea rows="14" id="copyTxt">${esc(txt)}</textarea></div>`, { narrow: true }); setTimeout(() => $("#copyTxt")?.select(), 50); }
+};
+$("#printList").onclick = () => {
+  const items = buildShopping().filter(i => i.status === "need");
+  if (!items.length) { toast("Nothing left to buy"); return; }
+  preparePrint(shopPrintHtml(items));
+  printNow("Shopping list");
 };
 $("#discForm").addEventListener("submit", e => { e.preventDefault(); const q = $("#discQ").value.trim(); if (q) runDisc("q", q); renderDisc(); });
 $("#discRandom").onclick = () => runDisc("random");

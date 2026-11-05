@@ -33,6 +33,7 @@ This project contains two apps that share the same views and data model:
   - Photo: on-device text recognition with Tesseract.js 5.1.1, loaded from jsdelivr on first use (`loadTesseract`, `ocrImages`). The text goes through `parseRecipeText`, and the photos are saved with the recipe.
   - Tesseract reads printed text well and handwriting poorly. For handwriting, use "Fill in by hand" or the artifact's Claude reader.
 - Export/import format: `{format: "larder-export", version: 1, exportedAt, recipes: [{id, ...recipe, images: [dataURL]}], plans?, shopping?}`. Both apps write it, and the web app reads it (`parseExport`, `importData`). Importing a recipe whose id already exists replaces it.
+- Print (recipe detail, Shopping): `preparePrint` fills `#printArea` with a plain layout (`recipePrintHtml`, `shopPrintHtml`) and `printNow` adds `body.printing` and calls `window.print()`; `@media print` in `styles.css` hides everything else. A recipe's printout is prepared when its detail opens, so the photo has loaded and `print()` can run straight from the tap (iOS Safari needs that).
 - The **⋮** button opens "Your data": download a full backup, or import.
 - Discover calls TheMealDB with `fetch` (it allows CORS).
 - No AI features; Discover needs no browser bridge.

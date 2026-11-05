@@ -212,3 +212,27 @@ h3.sec { font-family: var(--f-body); font-size: 12px; text-transform: uppercase;
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(20px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-weight: 600; font-size: 14px; z-index: 60; box-shadow: var(--shadow); max-width: calc(100% - 32px) }
 .lightbox { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.85); display: grid; place-items: center; padding: 16px; cursor: zoom-out }
 .lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px }
+
+/* Printing: Print fills #printArea (see "Printing" in app.js) and adds body.printing; on paper only #printArea shows. */
+#printArea { display: none }
+@media print {
+  @page { margin: 14mm }
+  html, body.printing { background: #fff !important; color: #000; padding: 0; overflow: visible !important; height: auto !important }
+  body.printing::before, body.printing > :not(#printArea) { display: none !important }
+  body.printing #printArea { display: block }
+  #printArea { font: 11.5pt/1.45 var(--f-body); color: #000 }
+  #printArea h1 { font-size: 22pt; margin: 0 0 4pt }
+  #printArea h2 { font-size: 13pt; margin: 14pt 0 6pt; padding-bottom: 3pt; border-bottom: 1px solid #999 }
+  #printArea .p-meta { color: #444; margin: 0 0 6pt }
+  #printArea .p-photo { float: right; width: 42%; max-height: 220px; object-fit: cover; border-radius: 6px; margin: 0 0 10pt 14pt }
+  #printArea ul, #printArea ol { margin: 0; padding-left: 18pt }
+  #printArea li { margin: 0 0 4pt; break-inside: avoid }
+  #printArea .p-steps li { margin-bottom: 7pt }
+  #printArea .p-notes { white-space: pre-wrap; margin: 0 }
+  #printArea .p-src { clear: both; margin-top: 16pt; font-size: 9pt; color: #555; word-break: break-all }
+  #printArea .p-cols { columns: 2; column-gap: 24pt }
+  #printArea .p-cols section { break-inside: avoid }
+  #printArea .p-cols h2 { margin-top: 10pt }
+  #printArea .p-check { list-style: none; padding: 0 }
+  #printArea .p-check li::before { content: ""; display: inline-block; width: 9pt; height: 9pt; border: 1px solid #000; border-radius: 2px; margin-right: 6pt; vertical-align: -1pt }
+}
