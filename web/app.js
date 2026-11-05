@@ -783,7 +783,7 @@ function drawLinkAdd(m, url = "") {
       <p>These send the recipe from the page you have open, so they also work on sites that block readers, like Allrecipes.</p>
       <p><b>iPhone or iPad</b> (Shortcuts app): tap <b>+</b> to make a shortcut named <b>Add to Forkast</b>. Its only action is <b>Run JavaScript on Web Page</b>, running on the <b>Shortcut Input</b>: replace its code with the script below. Don't add Open URLs; the script opens Forkast itself. In the shortcut's settings, turn on <b>Show in Share Sheet</b>. On a recipe page in Safari, tap Share → Add to Forkast, and that tab turns into Forkast with the recipe ready to save.
       <span style="display:flex;gap:8px;margin-top:6px"><button class="btn sm" type="button" id="copyShortcut">Copy script</button></span></p>
-      <p><b>Computer:</b> drag this to your bookmarks bar, then click it on a recipe page: <a class="btn sm" href="${esc(BOOKMARKLET)}" onclick="return false">Add to Forkast</a></p>
+      <p><b>Computer</b> (Chrome, Edge or Firefox):</p>${bookmarkHelp()}
       <p><b>Android:</b> install Forkast to your home screen, then pick Forkast in the share menu.</p>
       <p>Recipes sent this way open in the browser. Connect Google Drive there too, and they sync to your Forkast app.</p>
     </details>${aiTip}`;
@@ -804,7 +804,11 @@ function drawLinkAdd(m, url = "") {
       const r = await readRecipeLink(u, t => { st.className = "status"; st.innerHTML = `<span class="spin"></span>${esc(t)}`; });
       if (overlay.firstElementChild !== m) return;
       openEditor(r, true);
-    } catch (e) { st.className = "status err"; st.textContent = e.message || "Couldn't read that page."; btn.disabled = false; }
+    } catch (e) {
+      st.className = "status err"; st.textContent = e.message || "Couldn't read that page."; btn.disabled = false;
+      // On a computer, put the bookmark right here instead of inside the collapsed help.
+      if (!IS_IOS && e.blocked) st.insertAdjacentHTML("beforeend", `<div style="margin-top:8px;color:var(--ink)">To add it from the page, set up the <b>Add to Forkast</b> bookmark once:</div>${bookmarkHelp()}`);
+    }
   };
   btn.onclick = go;
   inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
@@ -883,7 +887,7 @@ function parseRecipeText(text) {
    so the server never sees it; GitHub Pages refuses long addresses): base64url of
    {u: page URL, r: the Recipe's fields that ldToRecipe reads, photo?: a JPEG data URL}. The photo is copied there because
    sites behind bot protection (the Allrecipes family) refuse their images to devices that haven't visited them. */
-const APP_VERSION = "2026-11-04b"; // shown in Your data, so it's clear which version a device is running
+const APP_VERSION = "2026-11-04c"; // shown in Your data, so it's clear which version a device is running
 const READER_URL ="https://script.google.com/macros/s/AKfycbyEtetYVZt1pvPZHAuPhFbTM0xK7G4DYrYEVoHMXnVkk_mL31vyaE0zM6y8FFOU9o7LvA/exec";
 const JINA = "https://r.jina.ai/";
 const SHARE_BASE = new URL("./", location.href).href;
@@ -936,6 +940,17 @@ function grabRecipe(base, done) {
 }
 const GRAB_SRC = String(grabRecipe).replace(/\s*\n\s*/g, " ");
 const BOOKMARKLET = `javascript:void((${GRAB_SRC})(${JSON.stringify(SHARE_BASE)},function(u){location.href=u;}))`;
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const MOD = /Mac/.test(navigator.platform) ? "⌘" : "Ctrl";
+// Setting up the bookmarklet in Chrome, Edge or Firefox. Shown in the Link tab's help, and after a blocked site fails.
+function bookmarkHelp() {
+  return `<ol style="margin:4px 0 10px;padding-left:20px;font-size:14px">
+    <li>Show the bookmarks bar: press <b>${MOD}+Shift+B</b>.</li>
+    <li>Drag this button onto the bar: <a class="btn sm" href="${esc(BOOKMARKLET)}" data-bm>Add to Forkast</a></li>
+    <li>On a recipe page (Serious Eats, Allrecipes…), click <b>Add to Forkast</b> in the bar. The tab turns into Forkast with the recipe and its photo, ready to save.</li>
+  </ol>
+  <p style="font-size:14px">If dragging doesn't work: <button class="btn sm" type="button" data-bmcopy>Copy bookmark address</button>, then right-click the bookmarks bar, choose <b>Add page</b> (Chrome, Edge) or <b>Add Bookmark</b> (Firefox), name it Add to Forkast and paste into the URL box.</p>`;
+}
 // The iOS shortcut is this one action: the script runs in the Safari tab itself and takes it to Forkast, like the bookmarklet.
 // (Handing the link to an Open URLs action failed: Shortcuts cut long links down to "…/forkast/?s".)
 const SHORTCUT_JS = `(${GRAB_SRC})(${JSON.stringify(SHARE_BASE)},function(u){location.href=u;completion("Opening Forkast");});`;
@@ -970,7 +985,7 @@ async function readRecipeLink(url, say) {
     }
   } catch (e) { console.warn("Jina:", e); }
   if (fallbackText) { const r = parseRecipeText(fallbackText); if (r.ingredients.length) return { ...r, source: "link", sourceUrl: url }; }
-  throw new Error("Couldn't read a recipe from that page. Some sites (like Allrecipes) block readers: open the page and use your Add to Forkast shortcut or bookmark there, or copy the recipe and use Paste.");
+  throw Object.assign(new Error("Couldn't read a recipe from that page. Some sites (like Allrecipes and Serious Eats) block readers: open the page and use your Add to Forkast shortcut or bookmark there, or copy the recipe and use Paste."), { blocked: true });
 }
 
 // schema.org Recipe, found anywhere in the page's JSON-LD (plain, in an array, in @graph or as mainEntity).
@@ -1384,6 +1399,12 @@ document.addEventListener("click", e => {
   if (d.dayadd) { addToPlan(d.rid, +d.dayadd); closeModal(); return; }
   if (d.unslot) { state.plan.slots = state.plan.slots.filter(s => s.id !== d.unslot); savePlan(); renderAll(); return; }
   if (d.serv) { const s = state.plan.slots.find(x => x.id === d.serv); if (s) { s.servings = Math.max(1, Math.min(40, (s.servings || 4) + +d.delta)); savePlan(); renderAll(); } return; }
+  if (d.bm !== undefined) { e.preventDefault(); toast("Drag this button to your bookmarks bar, then click it there on a recipe page"); return; }
+  if (d.bmcopy !== undefined) {
+    navigator.clipboard.writeText(BOOKMARKLET).then(() => toast("Bookmark address copied"))
+      .catch(() => { t.outerHTML = `<textarea rows="3" readonly style="width:100%">${esc(BOOKMARKLET)}</textarea>`; });
+    return;
+  }
   if (d.addmode) { openAdd(d.addmode); return; }
   if (d.amode) { if (d.amode === "manual") openEditor(null, true); else openAdd(d.amode); return; }
   if (d.have) { const k = d.have; state.shop.status[k] = state.shop.status[k] === "have" ? "need" : "have"; if (state.shop.status[k] === "need") delete state.shop.status[k]; saveShop(); renderAll(); return; }
